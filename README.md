@@ -76,10 +76,27 @@ pair must not appear twice. The same parameter name may of course be used
 by several producers, which is the point: `meteosat/ir108` and
 `metop/ir108` are different products.
 
-The `pattern` must match the **whole** file name, hence the leading
-`.*`. The `title`, `abstract` and `keywords` end up in the WMS
-GetCapabilities response. The bounding box is estimated from the newest
-image and can be overridden when the estimate is not wanted.
+The `pattern` is what separates the composites, because one directory
+holds all of them. It must match the **whole** file name, hence the
+leading `.*`, and it should be anchored at the end, because the names are
+not always distinct enough to be careless about. The AVHRR EARS directory
+for example holds
+
+```
+20260826_1122_Metop-C_EPSG3035_ir108.tif
+20260826_1122_Metop-C_EPSG3035_ir108_ilmavoimat.tif
+20260826_1122_Metop-C_EPSG3035_vis06_with_ir108.tif
+20260826_1122_Metop-C_EPSG3035_vis08_with_ir108.tif
+```
+
+so `.*_EPSG3035_ir108\.tif$` picks exactly one of the four, while a
+pattern like `.*ir108.*\.tif$` would pick all of them. Anchoring also
+keeps the partially written files out: the production system writes
+`name.tif.tmp.tif` and `name.tif.ovr.tmp` while it works.
+
+The `title`, `abstract` and `keywords` end up in the WMS GetCapabilities
+response. The bounding box is estimated from the newest image and can be
+overridden when the estimate is not wanted.
 
 ## Supported data
 
@@ -118,6 +135,24 @@ Two things dominate the cost of serving a zoomed out view:
    default. This is worth a factor of eight at 1024x1024.
 
 See `docs/poc-benchmarks.md` for measurements.
+
+## Scanning
+
+Each product is watched separately, with its own file name pattern and
+its own scan interval, and the monitor compares the modification times of
+the files matching that pattern only. Composites therefore do not
+interfere with each other even though they share a directory: one
+composite standing still cannot delay another, and an arriving image is
+credited to the product whose pattern matches it and to no other.
+
+The one subtlety is that the monitor is asked for MODIFY events even
+though the production system never rewrites an image. Without that
+request the monitor skips listing a directory whose own modification time
+has not advanced, and that time is shared by all the composites of the
+directory and has a one second resolution, so a change could be missed
+until something else happened in the same directory. The cost of asking
+for MODIFY is that a directory is listed once per product per interval
+rather than once per interval.
 
 ## Thread safety
 

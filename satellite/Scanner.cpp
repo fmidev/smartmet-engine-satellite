@@ -108,6 +108,17 @@ void Scanner::start(const std::map<ProductKey, Product>& theProducts)
                  const boost::regex& pattern,
                  const std::string& message) { this->error(id, path, pattern, message); },
           product.refresh_interval_secs,
+          // Asking for MODIFY is what makes this correct, and it is not
+          // about modified files. The monitor otherwise skips listing a
+          // directory whose own modification time has not advanced, and
+          // that time is shared by every composite in it: the composites
+          // of one instrument land in the same directory but not at the
+          // same moment, and the directory time has a one second
+          // resolution. Requesting MODIFY makes the monitor list the
+          // directory on every tick and compare the file times of the
+          // files matching this product only, so the products of one
+          // directory are noticed independently of each other. See the
+          // staggered_updates and modified_in_place tests.
           Fmi::DirectoryMonitor::CREATE | Fmi::DirectoryMonitor::DELETE |
               Fmi::DirectoryMonitor::MODIFY);
 

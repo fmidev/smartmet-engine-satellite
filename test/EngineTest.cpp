@@ -8,6 +8,7 @@
 #include <fmt/format.h>
 #include <iostream>
 #include <chrono>
+#include <fstream>
 #include <filesystem>
 #include <functional>
 #include <set>
@@ -32,6 +33,11 @@ const ProductKey geos_product = {"meteosat", "ir108"};
 const ProductKey float_product = {"meteosat", "ctth_tempe"};
 const ProductKey series_product = {"meteosat", "fog_rgb"};
 const ProductKey livescan_product = {"testsat", "livescan"};
+const ProductKey livescan_other_product = {"testsat", "livescan_other"};
+
+// These two share a directory and one name is a prefix of the other
+const ProductKey shared_dir_a = {"metop", "ir108"};
+const ProductKey shared_dir_b = {"metop", "ir108_ilmavoimat"};
 
 std::string name_of(const ProductKey& key)
 {
@@ -86,6 +92,12 @@ void menu_parameters()
     TEST_FAILED("Expected the parameters " + boost::algorithm::join(expected, ",") + ", got " +
                 boost::algorithm::join(params, ","));
 
+  auto metop = satellite->parameters("metop");
+  const std::vector<std::string> metop_expected = {"ir108", "ir108_ilmavoimat"};
+  if (metop != metop_expected)
+    TEST_FAILED("Expected the metop parameters " + boost::algorithm::join(metop_expected, ",") +
+                ", got " + boost::algorithm::join(metop, ","));
+
   // Another satellite must not see them
   auto others = satellite->parameters("goes-east");
   if (others.size() != 1 || others[0] != "truecolor")
@@ -93,6 +105,14 @@ void menu_parameters()
 
   if (!satellite->parameters("no_such_producer").empty())
     TEST_FAILED("Found parameters for an unknown producer");
+
+  // Two products may share a directory
+  auto testsat = satellite->parameters("testsat");
+  const std::vector<std::string> testsat_expected = {"livescan", "livescan_other"};
+  if (testsat != testsat_expected)
+    TEST_FAILED("Expected the testsat parameters " +
+                boost::algorithm::join(testsat_expected, ",") + ", got " +
+                boost::algorithm::join(testsat, ","));
 
   // The same parameter name may belong to several satellites
   if (!satellite->hasProduct("meteosat", "ir108") || !satellite->hasProduct("metop", "ir108"))
@@ -711,6 +731,280 @@ void live_scan()
 }
 
 // ----------------------------------------------------------------------
+/*!
+ * \brief Two products of one directory must not see each other's files
+ *
+ * One directory holds all the composites of one instrument, so the file
+ * name pattern is what separates the products. The names are not always
+ * distinct enough to be careless about: this directory holds ir108,
+ * ir108_ilmavoimat, vis06_with_ir108 and vis08_with_ir108, and the first
+ * name is a prefix of the second.
+ */
+// ----------------------------------------------------------------------
+
+void shared_directory()
+{
+  auto a_times = times_of(shared_dir_a);
+  auto b_times = times_of(shared_dir_b);
+
+  if (a_times.empty())
+    TEST_FAILED("No images for '" + name_of(shared_dir_a) + "'");
+  if (b_times.empty())
+    TEST_FAILED("No images for '" + name_of(shared_dir_b) + "'");
+
+  // Collect the files each product accepted
+  std::set<std::string> a_paths;
+  std::set<std::string> b_paths;
+
+  for (const auto& t : a_times)
+    a_paths.insert(find_image(shared_dir_a, t, Fmi::TimeDuration(0, 0, 0))->path);
+  for (const auto& t : b_times)
+    b_paths.insert(find_image(shared_dir_b, t, Fmi::TimeDuration(0, 0, 0))->path);
+
+  // The same file must never belong to both products
+  for (const auto& path : a_paths)
+    if (b_paths.count(path) != 0)
+      TEST_FAILED("Both products accepted '" + path + "'");
+
+  // And the files must be the ones the names promise
+  const auto ends_with = [](const std::string& str, const std::string& tail)
+  { return str.size() >= tail.size() && str.compare(str.size() - tail.size(), tail.size(), tail) == 0; };
+
+  for (const auto& path : a_paths)
+    if (!ends_with(path, "_EPSG3035_ir108.tif"))
+      TEST_FAILED("'" + name_of(shared_dir_a) + "' accepted '" + path + "'");
+
+  for (const auto& path : b_paths)
+    if (!ends_with(path, "_EPSG3035_ir108_ilmavoimat.tif"))
+      TEST_FAILED("'" + name_of(shared_dir_b) + "' accepted '" + path + "'");
+
+  // The directory holds more of both composites than of the plain one,
+  // which is another way of seeing that the two are really separate
+  if (a_paths.size() == b_paths.size() && a_paths == b_paths)
+    TEST_FAILED("The two products of the same directory have identical contents");
+
+  TEST_PASSED();
+}
+
+// ----------------------------------------------------------------------
+/*!
+ * \brief Composites of one directory are noticed independently
+ *
+ * The images of the composites of one instrument land in the same
+ * directory but not at the same moment: a polar orbiter composite may be
+ * hours late while a geostationary one arrives every fifteen minutes.
+ * Each product is watched separately, so one composite standing still
+ * must not delay another, and an arriving image must be credited to the
+ * product whose pattern it matches and to no other.
+ */
+// ----------------------------------------------------------------------
+
+void staggered_updates()
+{
+  const char* dir = getenv("SATELLITE_SCAN_DIR");
+  if (dir == nullptr)
+    TEST_FAILED("SATELLITE_SCAN_DIR is not set");
+
+  auto source = find_image(series_product, {}, Fmi::TimeDuration(0, 0, 0));
+  if (!source)
+    TEST_FAILED("No image available for '" + name_of(series_product) + "'");
+
+  const std::filesystem::path base(dir);
+  const auto first = base / "20230929_2100_Meteosat-10_fog_rgb_ir.tif";
+  const auto second = base / "20230929_2200_Meteosat-10_other.tif";
+  const auto third = base / "20230929_2300_Meteosat-10_fog_rgb_ir.tif";
+
+  const auto cleanup = [&]()
+  {
+    for (const auto& p : {first, second, third})
+      std::filesystem::remove(p);
+  };
+
+  const auto count = [](const ProductKey& key)
+  { return satellite->imageCount(key.first, key.second); };
+
+  // The scan interval of both products is one second
+  const auto wait_for = [](const std::function<bool()>& condition)
+  {
+    for (int i = 0; i < 100; i++)
+    {
+      if (condition())
+        return true;
+      std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    }
+    return false;
+  };
+
+  const auto fail = [&](const std::string& message)
+  {
+    cleanup();
+    TEST_FAILED(message);
+  };
+
+  if (count(livescan_product) != 0 || count(livescan_other_product) != 0)
+    TEST_FAILED("The live scan directory was not empty at the start");
+
+  // One composite arrives
+  std::filesystem::copy_file(
+      source->path, first, std::filesystem::copy_options::overwrite_existing);
+
+  if (!wait_for([&]() { return count(livescan_product) == 1; }))
+    fail("The first composite was not noticed");
+
+  if (count(livescan_other_product) != 0)
+    fail("The other composite of the same directory saw a file which is not its own");
+
+  // The other composite arrives an hour later
+  std::filesystem::copy_file(
+      source->path, second, std::filesystem::copy_options::overwrite_existing);
+
+  if (!wait_for([&]() { return count(livescan_other_product) == 1; }))
+    fail("The second composite was not noticed");
+
+  if (count(livescan_product) != 1)
+    fail("The first composite changed when the second one arrived");
+
+  // The first composite gets another image while the second stands still
+  std::filesystem::copy_file(
+      source->path, third, std::filesystem::copy_options::overwrite_existing);
+
+  if (!wait_for([&]() { return count(livescan_product) == 2; }))
+    fail("The new image of the first composite was not noticed");
+
+  if (count(livescan_other_product) != 1)
+    fail("The second composite changed when the first one was updated");
+
+  // Each product must have got exactly its own files
+  auto own = find_image(livescan_other_product, {}, Fmi::TimeDuration(0, 0, 0));
+  if (!own || own->path != second.string())
+    fail("The second composite is serving the wrong file");
+
+  // Removing one composite must not disturb the other
+  std::filesystem::remove(second);
+
+  if (!wait_for([&]() { return count(livescan_other_product) == 0; }))
+    fail("The deleted image of the second composite was not forgotten");
+
+  if (count(livescan_product) != 2)
+    fail("The first composite lost images when the second one was emptied");
+
+  cleanup();
+
+  if (!wait_for([&]() { return count(livescan_product) == 0; }))
+    TEST_FAILED("The deleted images of the first composite were not forgotten");
+
+  TEST_PASSED();
+}
+
+// ----------------------------------------------------------------------
+/*!
+ * \brief A file rewritten in place must be noticed
+ *
+ * The modification time of a directory changes when a file is created,
+ * deleted or renamed in it, but not when an existing file is rewritten.
+ * The directory monitor can use the directory time to skip scanning, and
+ * a scanner relying on that would serve the old pixels of a rewritten
+ * file forever, since the image hash which the WMS ETag is built from
+ * would never change either. Asking for MODIFY events disables that
+ * shortcut, which is why the scanner does so.
+ *
+ * Note that the file times have a one second resolution, hence the test
+ * has to wait before rewriting. In production this case does not arise
+ * from a rewrite at all: the images are written under a temporary name
+ * and renamed, which the monitor sees as a new file.
+ */
+// ----------------------------------------------------------------------
+
+void modified_in_place()
+{
+  const char* dir = getenv("SATELLITE_SCAN_DIR");
+  if (dir == nullptr)
+    TEST_FAILED("SATELLITE_SCAN_DIR is not set");
+
+  auto times = times_of(series_product);
+  if (times.size() < 2)
+    TEST_FAILED("Need two source images for '" + name_of(series_product) + "'");
+
+  auto first_source = find_image(series_product, times.front(), Fmi::TimeDuration(0, 0, 0));
+  auto second_source = find_image(series_product, times.back(), Fmi::TimeDuration(0, 0, 0));
+
+  const std::filesystem::path target =
+      std::filesystem::path(dir) / "20230929_2100_Meteosat-10_fog_rgb_ir.tif";
+
+  const auto cleanup = [&]() { std::filesystem::remove(target); };
+
+  const auto wait_for = [](const std::function<bool()>& condition)
+  {
+    for (int i = 0; i < 100; i++)
+    {
+      if (condition())
+        return true;
+      std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    }
+    return false;
+  };
+
+  const auto fail = [&](const std::string& message)
+  {
+    cleanup();
+    TEST_FAILED(message);
+  };
+
+  // Copy the contents of a file over another, keeping the same inode so
+  // that the directory itself is not touched
+  const auto overwrite = [](const std::filesystem::path& from,
+                            const std::filesystem::path& to)
+  {
+    std::ifstream in(from, std::ios::binary);
+    std::ofstream out(to, std::ios::binary | std::ios::trunc);
+    out << in.rdbuf();
+  };
+
+  std::filesystem::copy_file(
+      first_source->path, target, std::filesystem::copy_options::overwrite_existing);
+
+  if (!wait_for([&]() { return satellite->imageCount(livescan_product.first,
+                                                     livescan_product.second) == 1; }))
+    fail("The new file was not noticed");
+
+  auto before = find_image(livescan_product, {}, Fmi::TimeDuration(0, 0, 0));
+  if (!before)
+    fail("The new file was counted but cannot be found");
+  const auto hash_before = before->hash;
+
+  const auto dirtime_before = std::filesystem::last_write_time(dir);
+
+  // The file times have a one second resolution
+  std::this_thread::sleep_for(std::chrono::milliseconds(2000));
+
+  overwrite(second_source->path, target);
+
+  // The point of the test: the directory did not change
+  if (std::filesystem::last_write_time(dir) != dirtime_before)
+    fail("The test rewrote the file in a way which changed the directory");
+
+  if (!wait_for(
+          [&]()
+          {
+            auto now = find_image(livescan_product, {}, Fmi::TimeDuration(0, 0, 0));
+            return now && now->hash != hash_before;
+          }))
+    fail("The rewritten file was not noticed, so a stale image would be served");
+
+  // And there must still be exactly one image, not two
+  if (satellite->imageCount(livescan_product.first, livescan_product.second) != 1)
+    fail("The rewritten file was added instead of replaced");
+
+  cleanup();
+
+  if (!wait_for([&]() { return satellite->imageCount(livescan_product.first,
+                                                     livescan_product.second) == 0; }))
+    TEST_FAILED("The deleted file was not forgotten");
+
+  TEST_PASSED();
+}
+
+// ----------------------------------------------------------------------
 
 class tests : public tframe::tests
 {
@@ -720,6 +1014,7 @@ class tests : public tframe::tests
   {
     TEST(producers);
     TEST(menu_parameters);
+    TEST(shared_directory);
     TEST(times);
     TEST(parse_time);
     TEST(find);
@@ -733,6 +1028,8 @@ class tests : public tframe::tests
     TEST(warp_uses_overviews);
     TEST(warp_uncoloured_data_fails);
     TEST(live_scan);
+    TEST(staggered_updates);
+    TEST(modified_in_place);
     TEST(warp_speed);
   }
 

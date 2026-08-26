@@ -73,8 +73,23 @@ products orders of magnitude slower.
 eight. It is invisible for nearest neighbour resampling of precoloured
 data, but would need thought if interpolation were ever added.
 
-**File name patterns must match the whole name.** `DirectoryMonitor` uses
-`boost::regex_match`, hence patterns need a leading `.*`.
+**Never drop MODIFY from the directory monitor mask.** It is not about
+modified files. Without it the monitor skips listing a directory whose
+own modification time has not advanced, and that time is shared by every
+composite in the directory and has a one second resolution. With MODIFY
+the directory is listed on every tick and each product diffs the file
+times of its own files only, so composites arriving at different moments
+are noticed independently. Removing it makes `live_scan` and
+`staggered_updates` fail, which is the intended guard.
+
+**File name patterns must match the whole name, and must be anchored at
+the end.** `DirectoryMonitor` uses `boost::regex_match`, hence patterns
+need a leading `.*`. One directory holds every composite of an
+instrument, and the names overlap: the AVHRR EARS directory has `ir108`,
+`ir108_ilmavoimat`, `vis06_with_ir108` and `vis08_with_ir108`, so
+`.*_EPSG3035_ir108\.tif$` is right and `.*ir108.*\.tif$` would swallow
+all four. The `shared_directory` test in `test/EngineTest.cpp` guards
+this; it fails if the pattern is loosened.
 
 **Image identity, not pixels, is the ETag basis.** `ImageInfo::hash`
 combines the path, size and modification time. The production system
