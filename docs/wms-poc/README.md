@@ -68,6 +68,30 @@ reason these files are not committed to the plugin.
 | `satellite_fog` | several timesteps, which exercises the WMS time dimension |
 | `satellite.json` (Dali) | a fixed EPSG:3067 projection, for rendering without a WMS request |
 
+## Capabilities do not refresh in the test configuration
+
+`test/cnf/wms.conf` sets `wms.get_capabilities.disable_updates = true`
+with the comment "one scan is enough during tests". A satellite image
+which arrives while the server is running is therefore picked up by the
+engine but never appears in GetCapabilities, and a GetMap for its time is
+rejected as outside the advertised time dimension.
+
+`cnf/wms-satellite.conf`, which the standalone server below uses, is a
+copy of `wms.conf` with `disable_updates = false` and `update_interval =
+5`. With that, a new file appears in the capabilities within one scan
+interval of the engine. Do not go looking for a bug in the engine before
+checking this setting; the engine has a regression test for the live
+scanning (`live_scan` in `test/EngineTest.cpp`).
+
+To produce that file:
+
+```bash
+cd $WMS/test
+sed -e 's/disable_updates = true;/disable_updates = false;/' \
+    -e 's/# update_interval = 5;/update_interval = 5;/' \
+    cnf/wms.conf > cnf/wms-satellite.conf
+```
+
 ## Standalone server
 
 `cnf/server-satellite.conf` runs `smartmetd` with the same engines and

@@ -6,7 +6,11 @@
 #include <spine/Reactor.h>
 #include <fmt/format.h>
 #include <iostream>
+#include <chrono>
+#include <filesystem>
+#include <functional>
 #include <set>
+#include <thread>
 #include <vector>
 
 using namespace std;
@@ -25,6 +29,7 @@ const std::string cog_producer = "goes_east_truecolor";
 const std::string geos_producer = "meteosat_geos_ir108";
 const std::string float_producer = "nwcsaf_ctth_tempe";
 const std::string series_producer = "meteosat_fog_rgb";
+const std::string livescan_producer = "livescan";
 
 // ----------------------------------------------------------------------
 
@@ -32,8 +37,8 @@ void producers()
 {
   auto names = satellite->producers();
 
-  if (names.size() != 6)
-    TEST_FAILED("Expected 6 producers, got " + Fmi::to_string(names.size()));
+  if (names.size() != 7)
+    TEST_FAILED("Expected 7 producers, got " + Fmi::to_string(names.size()));
 
   for (const auto& name : {rgba_producer, grayalpha_producer, cog_producer, geos_producer})
     if (!satellite->hasProducer(name))
@@ -581,6 +586,74 @@ void warp_speed()
 }
 
 // ----------------------------------------------------------------------
+/*!
+ * \brief New files must be noticed without restarting the server
+ *
+ * Satellite images arrive continuously, hence this is the one thing the
+ * engine must never get wrong.
+ */
+// ----------------------------------------------------------------------
+
+void live_scan()
+{
+  const char* dir = getenv("SATELLITE_SCAN_DIR");
+  if (dir == nullptr)
+    TEST_FAILED("SATELLITE_SCAN_DIR is not set");
+
+  // The directory starts out empty
+  if (satellite->imageCount(livescan_producer) != 0)
+    TEST_FAILED("The live scan directory was not empty at the start");
+
+  // Take a real image as the source
+  auto source = satellite->find(series_producer, {}, Fmi::TimeDuration(0, 0, 0));
+  if (!source)
+    TEST_FAILED("No image available for '" + series_producer + "'");
+
+  const std::filesystem::path target =
+      std::filesystem::path(dir) / "20230929_2100_Meteosat-10_fog_rgb_ir.tif";
+
+  std::filesystem::copy_file(
+      source->path, target, std::filesystem::copy_options::overwrite_existing);
+
+  // The scan interval of this producer is one second
+  const auto wait_for = [](const std::function<bool()>& condition)
+  {
+    for (int i = 0; i < 100; i++)
+    {
+      if (condition())
+        return true;
+      std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    }
+    return false;
+  };
+
+  if (!wait_for([]() { return satellite->imageCount(livescan_producer) == 1; }))
+  {
+    std::filesystem::remove(target);
+    TEST_FAILED("The new file was not noticed within 20 seconds");
+  }
+
+  // The image must be usable, not merely counted
+  auto found = satellite->find(livescan_producer, {}, Fmi::TimeDuration(0, 0, 0));
+  if (!found)
+    TEST_FAILED("The new image was counted but cannot be found");
+  if (Fmi::to_iso_string(found->time) != "20230929T210000")
+    TEST_FAILED("The time of the new image is " + Fmi::to_iso_string(found->time));
+  if (found->path != target.string())
+    TEST_FAILED("The path of the new image is " + found->path);
+  if (found->width != source->width || found->model != source->model)
+    TEST_FAILED("The metadata of the new image was not read correctly");
+
+  // And a deleted file must disappear
+  std::filesystem::remove(target);
+
+  if (!wait_for([]() { return satellite->imageCount(livescan_producer) == 0; }))
+    TEST_FAILED("The deleted file was not forgotten within 20 seconds");
+
+  TEST_PASSED();
+}
+
+// ----------------------------------------------------------------------
 
 class tests : public tframe::tests
 {
@@ -601,6 +674,7 @@ class tests : public tframe::tests
     TEST(warp_geostationary);
     TEST(warp_uses_overviews);
     TEST(warp_uncoloured_data_fails);
+    TEST(live_scan);
     TEST(warp_speed);
   }
 
