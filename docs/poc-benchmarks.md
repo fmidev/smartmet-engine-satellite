@@ -19,12 +19,12 @@ default.
 
 | Case | Source | Exact | Approximate |
 | --- | --- | --- | --- |
-| 256x256 EPSG:3857, zoomed in | SEVIRI 2 km, 2028x2510 | 26.5 ms | **12.3 ms** |
-| 512x512 EPSG:3857, zoomed in | SEVIRI 2 km | 75.1 ms | **16.5 ms** |
-| 1024x1024 EPSG:3857, zoomed in | SEVIRI 2 km | 269.2 ms | **31.8 ms** |
-| 1024x1024 EPSG:3857, all of Europe | SEVIRI 2 km | 302.8 ms | **180.8 ms** |
-| 256x256 EPSG:3857, whole Earth | GOES-East Eckert IV, 7633x8313, 63 MB **COG** | 23.5 ms | **12.4 ms** |
-| 512x512 EPSG:3857, whole disc | SEVIRI geostationary, 3712x3712, **no overviews** | 149.6 ms | **151.2 ms** |
+| 256x256 EPSG:3857, zoomed in | SEVIRI 2 km, 2028x2510 | 26.5 ms | **9.7 ms** |
+| 512x512 EPSG:3857, zoomed in | SEVIRI 2 km | 75.1 ms | **10.6 ms** |
+| 1024x1024 EPSG:3857, zoomed in | SEVIRI 2 km | 269.2 ms | **18.3 ms** |
+| 1024x1024 EPSG:3857, all of Europe | SEVIRI 2 km | 302.8 ms | **159.8 ms** |
+| 256x256 EPSG:3857, whole Earth | GOES-East Eckert IV, 7633x8313 **COG** | 23.5 ms | **12.1 ms** |
+| 512x512 EPSG:3857, whole disc | SEVIRI geostationary, 3712x3712, **no overviews** | 149.6 ms | **149.6 ms** |
 
 Two observations decide the performance of this engine.
 
@@ -51,14 +51,13 @@ neighbour resampling of precoloured imagery.
 rendered image cache is bypassed; the median of five to ten requests is
 given, since the first touch of a file also pays for reading it from disk.
 
-| Request | Engine warp | Whole request | Pipeline overhead |
+| Request | Engine warp | Whole request | Pipeline share |
 | --- | --- | --- | --- |
-| GetMap 256x256 EPSG:3857, SEVIRI | 12 ms | **70 ms** | ~58 ms |
-| GetMap 512x512 EPSG:3067, SEVIRI | 17 ms | **193 ms** | ~176 ms |
-| GetMap 1024x1024 EPSG:3067, SEVIRI | 32 ms | **431 ms** | ~400 ms |
-| GetMap 1024x1024 EPSG:3857, Europe | 181 ms | **539 ms** | ~360 ms |
-| GetMap 512x512, geostationary disc | 151 ms | **278 ms** | ~127 ms |
-| GetMap 256x256, whole Earth from COG | 12 ms | **105 ms** | ~93 ms |
+| GetMap 256x256 EPSG:3857, SEVIRI | 9.7 ms | **70 ms** | 86 % |
+| GetMap 512x512 EPSG:3067, SEVIRI | 10.6 ms | **193 ms** | 95 % |
+| GetMap 350x380 EPSG:3035, cloud top temperature with a colour map | ~10 ms | **78 ms** | 87 % |
+| GetMap 256x256, whole Earth from a COG | 12.1 ms | **114 ms** | 89 % |
+| GetMap 512x512, geostationary disc, no overviews | 149.6 ms | **278 ms** | 46 % |
 | WMTS GetTile 1024x1024, zoom 5 | | **151 ms** | |
 
 The difference between the warp and the whole request is the shared
@@ -74,6 +73,34 @@ the plugin already bypasses the SVG pipeline for GeoTIFF, MVT and
 DataTile output. A satellite layer which is the only layer of a product,
 which is the normal case for a tile service, could encode its RGBA buffer
 straight into the response.
+
+## Where a cache would help
+
+Measured with a standalone GDAL program (`docs/` has no copy; the numbers
+come from the same machine and data). The question is whether the engine
+should keep decompressed pixels in memory.
+
+| Operation | Cost |
+| --- | --- |
+| Opening and closing a GeoTIFF, metadata only | **0.043 ms** |
+| Decompressing the whole base level of the 2 km RGBA product, 20.4 MB of pixels | **81 ms** |
+| The same read with the dataset kept open, blocks already decompressed | **2.8 ms** |
+| One 256x256 tile of that product, dataset opened per request | **13.3 ms** |
+| The same tile with the dataset kept open | **2.8 ms**, GDAL holding 2.1 MB |
+
+Opening a file costs nothing, so the win from keeping a dataset open is
+entirely the decompressed blocks GDAL retains. Note the last row: serving
+that tile needs only 2.1 MB of decompressed blocks, not the whole 20 MB
+image, because the request touches a few 512x512 tiles of one overview
+level. A cache of decompressed **blocks**, which is what GDAL's own block
+cache is, therefore buys the whole saving at a fraction of the memory a
+cache of decompressed **images** would need.
+
+For comparison, whole decompressed images are 20 MB for the 2 km European
+products, 55 MB for a geostationary full disc, 254 MB for GOES-East in
+Eckert IV and 563 MB for Himawari. A cache holding "1000 images" is
+therefore anywhere between 20 GB and 500 GB, which is why such a cache
+has to be bounded in bytes rather than in images.
 
 ## Caching
 
