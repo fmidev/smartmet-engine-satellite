@@ -20,13 +20,10 @@ BuildRoot: %{_tmppath}/%{name}-%{version}-%{release}-root-%(%{__id_u} -n)
 %define smartmet_boost boost
 %endif
 
-%if 0%{?rhel} && 0%{rhel} < 10
-%define smartmet_fmt fmt11-devel
-%define smartmet_fmt_lib fmt11
-%else
-%define smartmet_fmt fmt-devel
-%define smartmet_fmt_lib fmt
-%endif
+%define smartmet_fmt_min 12.0.0
+%define smartmet_fmt_max 13.0.0
+%define smartmet_fmt fmt-libs >= %{smartmet_fmt_min}, fmt-libs < %{smartmet_fmt_max}
+%define smartmet_fmt_devel fmt-devel >= %{smartmet_fmt_min}, fmt-devel < %{smartmet_fmt_max}
 
 BuildRequires: rpm-build
 BuildRequires: gcc-c++
@@ -36,7 +33,7 @@ BuildRequires: smartmet-library-spine-devel >= 26.8.24
 BuildRequires: smartmet-library-macgyver-devel >= 26.8.24
 BuildRequires: smartmet-utils-devel >= 26.8.24
 BuildRequires: libconfig17-devel
-BuildRequires: %{smartmet_fmt}
+BuildRequires: %{smartmet_fmt_devel}
 BuildRequires: gdal312-devel
 #TestRequires: smartmet-test-data >= 26.8.26
 #TestRequires: smartmet-library-regression
@@ -45,7 +42,7 @@ Requires: %{smartmet_boost}-regex
 Requires: smartmet-library-spine >= 26.8.24
 Requires: smartmet-library-macgyver >= 26.8.24
 Requires: libconfig17
-Requires: %{smartmet_fmt_lib}
+Requires: %{smartmet_fmt}
 Requires: gdal312-libs
 Provides: %{SPECNAME}
 
