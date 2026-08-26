@@ -6,7 +6,7 @@
 
 #pragma once
 
-#include "Producer.h"
+#include "Product.h"
 #include <libconfig.h++>
 #include <map>
 #include <string>
@@ -23,14 +23,14 @@ class Config
   Config() = delete;
   explicit Config(const std::string& theFileName);
 
-  const std::map<std::string, Producer>& producers() const { return itsProducers; }
+  const std::map<ProductKey, Product>& products() const { return itsProducts; }
 
  private:
-  void parseProducer(const libconfig::Setting& theSetting);
+  void parseProduct(const libconfig::Setting& theSetting);
 
   libconfig::Config itsConfig;
   std::filesystem::path itsRootDir;
-  std::map<std::string, Producer> itsProducers;
+  std::map<ProductKey, Product> itsProducts;
 };
 
 }  // namespace Satellite

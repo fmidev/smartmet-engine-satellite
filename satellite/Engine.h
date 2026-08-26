@@ -7,9 +7,11 @@
  * the pixels are RGBA and no styling is applied, hence the projection
  * transformations use nearest neighbour interpolation.
  *
- * One producer is one composite of one instrument, for example the
- * natural colour composite of SEVIRI in EPSG:3035. The producer name
- * identifies the data completely: there is no parameter to choose.
+ * A product is identified by a producer and a parameter: the producer
+ * is the satellite or data stream, for example "meteosat", and the
+ * parameter is the composite of it, for example "natural". Clients build
+ * their menus by listing the producers and then the parameters of the
+ * one the user picked.
  *
  * The images are stored as cloud optimized GeoTIFF files by the data
  * production system. The engine watches the configured directories,
@@ -48,27 +50,35 @@ class Engine : public SmartMet::Spine::SmartMetEngine
   Engine(Engine&&) = delete;
   Engine& operator=(Engine&&) = delete;
 
-  // Available producers, sorted by name
+  // The satellites available, sorted. A client builds the first level
+  // of its menu from these.
   std::vector<std::string> producers() const;
 
+  // The composites available for one satellite, sorted. The second level
+  // of the menu.
+  std::vector<std::string> parameters(const std::string& theProducer) const;
+
   bool hasProducer(const std::string& theProducer) const;
+  bool hasProduct(const std::string& theProducer, const std::string& theParameter) const;
 
   // Metadata needed for GetCapabilities responses
-  ProducerInfo producerInfo(const std::string& theProducer) const;
+  ProductInfo productInfo(const std::string& theProducer, const std::string& theParameter) const;
 
   // Valid times of the available images, sorted
-  std::vector<Fmi::DateTime> times(const std::string& theProducer) const;
+  std::vector<Fmi::DateTime> times(const std::string& theProducer,
+                                   const std::string& theParameter) const;
 
   // Time of the newest image, NOT_A_DATE_TIME if there are none
-  Fmi::DateTime latestTime(const std::string& theProducer) const;
+  Fmi::DateTime latestTime(const std::string& theProducer, const std::string& theParameter) const;
 
   // Number of images available
-  std::size_t imageCount(const std::string& theProducer) const;
+  std::size_t imageCount(const std::string& theProducer, const std::string& theParameter) const;
 
   // Find the image closest to the requested time, or the newest image if
-  // no time is requested. Returns nullptr if the producer is unknown or
+  // no time is requested. Returns nullptr if the product is unknown or
   // no image is within the tolerance.
   ImageInfoPtr find(const std::string& theProducer,
+                    const std::string& theParameter,
                     const std::optional<Fmi::DateTime>& theTime,
                     const Fmi::TimeDuration& theTolerance) const;
 

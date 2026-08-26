@@ -12,6 +12,10 @@ See `README.md` for the concepts and configuration, and
 Only the `satellite` layer type of the WMS plugin uses this engine. No
 other plugin or layer knows it exists.
 
+A product is identified by a **producer** (the satellite) and a
+**parameter** (the composite), so that clients can build menus by listing
+producers and then the parameters of one. `ProductKey` is that pair.
+
 ## Build and test commands
 
 ```bash
@@ -30,20 +34,21 @@ make test SATELLITE_TEST_DATA=$HOME/hub/satellite/weather
 
 `test/EngineTest.cpp` drives the engine through a real `Spine::Reactor`
 using `test/cnf/reactor.conf`, which loads the locally built
-`../../satellite.so`. The producers in `test/cnf/satellite.conf` are
-chosen so that every data flavour is covered once: RGBA in a projected
-CRS, gray plus alpha, a large cloud optimized GeoTIFF in Eckert IV, the
-native geostationary projection, uncoloured Float32 data, and one
-producer with several timesteps.
+`../../satellite.so`. The products in `test/cnf/satellite.conf` are chosen so that every data
+flavour is covered once: RGBA in a projected CRS, gray plus alpha, a
+large cloud optimized GeoTIFF in Eckert IV, the native geostationary
+projection, uncoloured Float32 data, and one product with several
+timesteps. Several of them share the producer `meteosat`, which is what
+the menu tests need, and `ir108` exists for two producers.
 
 ## Source layout
 
 ```
 satellite/Engine.{h,cpp}      Engine class, the API the WMS layer uses
 satellite/Config.{h,cpp}      libconfig parsing
-satellite/Producer.h          One producer's configuration
+satellite/Product.h           One product's configuration
 satellite/ImageInfo.h         Metadata of one image file
-satellite/Repository.{h,cpp}  The catalog: producer -> time -> image
+satellite/Repository.{h,cpp}  The catalog: (producer,parameter) -> time -> image
 satellite/Scanner.{h,cpp}     DirectoryMonitor keeping the catalog current
 satellite/Gdal.{h,cpp}        All GDAL and PROJ usage
 ```

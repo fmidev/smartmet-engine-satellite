@@ -1,10 +1,12 @@
 // ======================================================================
 /*!
- * \brief Configuration of a single satellite producer
+ * \brief Configuration of a single satellite product
  *
- * One producer is one WMS layer identity: a directory holding the
- * images of one composite, and a pattern selecting that composite from
- * the other composites stored in the same directory.
+ * A product is identified by a producer and a parameter: the producer
+ * says which satellite or data stream the images come from, and the
+ * parameter says which composite of it. Both are needed because one
+ * directory holds many composites of many times, and because clients
+ * build their menus by listing the parameters of a producer.
  */
 // ======================================================================
 
@@ -23,9 +25,11 @@ namespace Engine
 {
 namespace Satellite
 {
-struct Producer
+struct Product
 {
-  std::string name;  // Producer name used in layer definitions
+  std::string id;         // Name of the configuration group, for messages
+  std::string producer;   // Satellite or data stream, for example "meteosat"
+  std::string parameter;  // Composite, for example "natural"
 
   std::filesystem::path directory;  // Absolute directory to scan
 
@@ -48,6 +52,14 @@ struct Producer
   int refresh_interval_secs{60};  // Directory scan interval
   std::size_t max_files{200};     // Keep only this many newest images, 0 = all
 };
+
+// A product is addressed by the producer and parameter pair
+using ProductKey = std::pair<std::string, std::string>;
+
+inline ProductKey make_key(const std::string& theProducer, const std::string& theParameter)
+{
+  return {theProducer, theParameter};
+}
 
 }  // namespace Satellite
 }  // namespace Engine

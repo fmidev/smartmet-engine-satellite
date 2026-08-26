@@ -62,10 +62,10 @@ reason these files are not committed to the plugin.
 
 | Product | Covers |
 | --- | --- |
-| `satellite_meteosat` | RGBA in EPSG:3035, the primary case, with a border overlay to show compositing |
-| `satellite_geos` | native geostationary projection, gray plus alpha, full disc |
-| `satellite_goes` | large cloud optimized GeoTIFF in Eckert IV, which has no EPSG code |
-| `satellite_fog` | several timesteps, which exercises the WMS time dimension |
+| `satellite_meteosat` | `meteosat/natural`: RGBA in EPSG:3035, the primary case, with a border overlay to show compositing |
+| `satellite_geos` | `meteosat/ir108`: native geostationary projection, gray plus alpha, full disc |
+| `satellite_goes` | `goes-east/truecolor`: large cloud optimized GeoTIFF in Eckert IV, which has no EPSG code |
+| `satellite_fog` | `meteosat/fog_rgb`: several timesteps, which exercises the WMS time dimension |
 | `satellite.json` (Dali) | a fixed EPSG:3067 projection, for rendering without a WMS request |
 
 ## Capabilities do not refresh in the test configuration

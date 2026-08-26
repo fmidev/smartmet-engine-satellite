@@ -1,7 +1,17 @@
 {
   "title": "Meteosat fog RGB",
   "abstract": "Fog RGB composite based on infrared channels",
-  "producer": "meteosat_fog_rgb",
+  "producer": "meteosat",
+  "parameter": "fog_rgb",
   "projection": {},
-  "views": [ { "layers": [ { "qid": "sat", "layer_type": "satellite" } ] } ]
+  "views": [
+    {
+      "layers": [
+        {
+          "qid": "sat",
+          "layer_type": "satellite"
+        }
+      ]
+    }
+  ]
 }

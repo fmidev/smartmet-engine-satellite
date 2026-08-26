@@ -39,11 +39,11 @@ void Engine::init()
 
     itsConfig = std::make_unique<Config>(itsConfigFile);
 
-    for (const auto& [name, producer] : itsConfig->producers())
-      itsRepository.add(producer);
+    for (const auto& [key, product] : itsConfig->products())
+      itsRepository.add(product);
 
     itsScanner = std::make_unique<Scanner>(itsRepository);
-    itsScanner->start(itsConfig->producers());
+    itsScanner->start(itsConfig->products());
   }
   catch (...)
   {
@@ -68,6 +68,13 @@ std::vector<std::string> Engine::producers() const
 
 // ----------------------------------------------------------------------
 
+std::vector<std::string> Engine::parameters(const std::string& theProducer) const
+{
+  return itsRepository.parameters(theProducer);
+}
+
+// ----------------------------------------------------------------------
+
 bool Engine::hasProducer(const std::string& theProducer) const
 {
   return itsRepository.hasProducer(theProducer);
@@ -75,39 +82,51 @@ bool Engine::hasProducer(const std::string& theProducer) const
 
 // ----------------------------------------------------------------------
 
-ProducerInfo Engine::producerInfo(const std::string& theProducer) const
+bool Engine::hasProduct(const std::string& theProducer, const std::string& theParameter) const
 {
-  return itsRepository.producerInfo(theProducer);
+  return itsRepository.hasProduct(make_key(theProducer, theParameter));
 }
 
 // ----------------------------------------------------------------------
 
-std::vector<Fmi::DateTime> Engine::times(const std::string& theProducer) const
+ProductInfo Engine::productInfo(const std::string& theProducer,
+                                const std::string& theParameter) const
 {
-  return itsRepository.times(theProducer);
+  return itsRepository.productInfo(make_key(theProducer, theParameter));
 }
 
 // ----------------------------------------------------------------------
 
-Fmi::DateTime Engine::latestTime(const std::string& theProducer) const
+std::vector<Fmi::DateTime> Engine::times(const std::string& theProducer,
+                                         const std::string& theParameter) const
 {
-  return itsRepository.latestTime(theProducer);
+  return itsRepository.times(make_key(theProducer, theParameter));
 }
 
 // ----------------------------------------------------------------------
 
-std::size_t Engine::imageCount(const std::string& theProducer) const
+Fmi::DateTime Engine::latestTime(const std::string& theProducer,
+                                 const std::string& theParameter) const
 {
-  return itsRepository.size(theProducer);
+  return itsRepository.latestTime(make_key(theProducer, theParameter));
+}
+
+// ----------------------------------------------------------------------
+
+std::size_t Engine::imageCount(const std::string& theProducer,
+                               const std::string& theParameter) const
+{
+  return itsRepository.size(make_key(theProducer, theParameter));
 }
 
 // ----------------------------------------------------------------------
 
 ImageInfoPtr Engine::find(const std::string& theProducer,
+                          const std::string& theParameter,
                           const std::optional<Fmi::DateTime>& theTime,
                           const Fmi::TimeDuration& theTolerance) const
 {
-  return itsRepository.find(theProducer, theTime, theTolerance);
+  return itsRepository.find(make_key(theProducer, theParameter), theTime, theTolerance);
 }
 
 // ----------------------------------------------------------------------

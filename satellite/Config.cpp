@@ -41,18 +41,18 @@ Config::Config(const std::string& theFileName)
       throw Fmi::Exception(BCP, "Setting 'rootdir' is missing from '" + theFileName + "'");
     itsRootDir = rootdir;
 
-    if (!itsConfig.exists("producers"))
-      throw Fmi::Exception(BCP, "Setting 'producers' is missing from '" + theFileName + "'");
+    if (!itsConfig.exists("products"))
+      throw Fmi::Exception(BCP, "Setting 'products' is missing from '" + theFileName + "'");
 
-    const auto& producers = itsConfig.lookup("producers");
-    if (!producers.isGroup())
-      throw Fmi::Exception(BCP, "Setting 'producers' must be a group in '" + theFileName + "'");
+    const auto& products = itsConfig.lookup("products");
+    if (!products.isGroup())
+      throw Fmi::Exception(BCP, "Setting 'products' must be a group in '" + theFileName + "'");
 
-    for (int i = 0; i < producers.getLength(); i++)
-      parseProducer(producers[i]);
+    for (int i = 0; i < products.getLength(); i++)
+      parseProduct(products[i]);
 
-    if (itsProducers.empty())
-      throw Fmi::Exception(BCP, "No producers defined in '" + theFileName + "'");
+    if (itsProducts.empty())
+      throw Fmi::Exception(BCP, "No products defined in '" + theFileName + "'");
   }
   catch (const libconfig::ParseException& e)
   {
@@ -73,19 +73,28 @@ Config::Config(const std::string& theFileName)
 
 // ----------------------------------------------------------------------
 /*!
- * \brief Parse the settings of a single producer
+ * \brief Parse the settings of a single product
+ *
+ * A product tells which satellite the images come from, which composite
+ * of it, and where the files are.
  */
 // ----------------------------------------------------------------------
 
-void Config::parseProducer(const libconfig::Setting& theSetting)
+void Config::parseProduct(const libconfig::Setting& theSetting)
 {
-  Producer producer;
-  producer.name = theSetting.getName();
+  Product product;
+  product.id = theSetting.getName();
 
   try
   {
     if (!theSetting.isGroup())
-      throw Fmi::Exception(BCP, "Producer setting must be a group");
+      throw Fmi::Exception(BCP, "Product setting must be a group");
+
+    if (!theSetting.lookupValue("producer", product.producer) || product.producer.empty())
+      throw Fmi::Exception(BCP, "Setting 'producer' is missing");
+
+    if (!theSetting.lookupValue("parameter", product.parameter) || product.parameter.empty())
+      throw Fmi::Exception(BCP, "Setting 'parameter' is missing");
 
     std::string directory;
     if (!theSetting.lookupValue("directory", directory))
@@ -93,27 +102,27 @@ void Config::parseProducer(const libconfig::Setting& theSetting)
 
     // Relative directories are relative to the configured root
     std::filesystem::path dir = directory;
-    producer.directory = dir.is_absolute() ? dir : itsRootDir / dir;
+    product.directory = dir.is_absolute() ? dir : itsRootDir / dir;
 
-    if (!theSetting.lookupValue("pattern", producer.pattern))
+    if (!theSetting.lookupValue("pattern", product.pattern))
       throw Fmi::Exception(BCP, "Setting 'pattern' is missing");
-    producer.regex = boost::regex(producer.pattern);
+    product.regex = boost::regex(product.pattern);
 
-    theSetting.lookupValue("title", producer.title);
-    theSetting.lookupValue("abstract", producer.abstract);
-    theSetting.lookupValue("refresh_interval_secs", producer.refresh_interval_secs);
+    theSetting.lookupValue("title", product.title);
+    theSetting.lookupValue("abstract", product.abstract);
+    theSetting.lookupValue("refresh_interval_secs", product.refresh_interval_secs);
 
-    if (producer.title.empty())
-      producer.title = producer.name;
+    if (product.title.empty())
+      product.title = product.id;
 
     // libconfig has no unsigned type, hence the detour
-    int max_files = static_cast<int>(producer.max_files);
+    int max_files = static_cast<int>(product.max_files);
     theSetting.lookupValue("max_files", max_files);
     if (max_files < 0)
       throw Fmi::Exception(BCP, "Setting 'max_files' must not be negative");
-    producer.max_files = static_cast<std::size_t>(max_files);
+    product.max_files = static_cast<std::size_t>(max_files);
 
-    if (producer.refresh_interval_secs <= 0)
+    if (product.refresh_interval_secs <= 0)
       throw Fmi::Exception(BCP, "Setting 'refresh_interval_secs' must be positive");
 
     if (theSetting.exists("keywords"))
@@ -122,7 +131,7 @@ void Config::parseProducer(const libconfig::Setting& theSetting)
       if (!keywords.isArray())
         throw Fmi::Exception(BCP, "Setting 'keywords' must be an array");
       for (int i = 0; i < keywords.getLength(); i++)
-        producer.keywords.emplace_back(static_cast<const char*>(keywords[i]));
+        product.keywords.emplace_back(static_cast<const char*>(keywords[i]));
     }
 
     if (theSetting.exists("bbox"))
@@ -138,21 +147,28 @@ void Config::parseProducer(const libconfig::Setting& theSetting)
       if (values[0] >= values[2] || values[1] >= values[3])
         throw Fmi::Exception(BCP, "Setting 'bbox' must be [minx, miny, maxx, maxy]");
 
-      producer.bbox = values;
+      product.bbox = values;
     }
 
-    itsProducers.insert({producer.name, producer});
+    const auto key = make_key(product.producer, product.parameter);
+
+    if (itsProducts.find(key) != itsProducts.end())
+      throw Fmi::Exception(BCP, "Producer and parameter pair is already in use")
+          .addParameter("Producer", product.producer)
+          .addParameter("Parameter", product.parameter);
+
+    itsProducts.insert({key, product});
   }
   catch (const boost::regex_error& e)
   {
     throw Fmi::Exception(BCP, fmt::format("Invalid pattern regex: {}", e.what()))
-        .addParameter("Producer", producer.name)
-        .addParameter("Pattern", producer.pattern);
+        .addParameter("Product", product.id)
+        .addParameter("Pattern", product.pattern);
   }
   catch (...)
   {
-    throw Fmi::Exception::Trace(BCP, "Failed to parse satellite producer settings")
-        .addParameter("Producer", producer.name);
+    throw Fmi::Exception::Trace(BCP, "Failed to parse satellite product settings")
+        .addParameter("Product", product.id);
   }
 }
 

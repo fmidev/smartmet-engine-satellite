@@ -5,7 +5,9 @@
 // ======================================================================
 
 #include "Repository.h"
+#include <fmt/format.h>
 #include <macgyver/Exception.h>
+#include <set>
 
 namespace SmartMet
 {
@@ -13,21 +15,29 @@ namespace Engine
 {
 namespace Satellite
 {
+namespace
+{
+std::string describe(const ProductKey& theKey)
+{
+  return fmt::format("{}/{}", theKey.first, theKey.second);
+}
+}  // namespace
+
 // ----------------------------------------------------------------------
 
-void Repository::add(const Producer& theProducer)
+void Repository::add(const Product& theProduct)
 {
   try
   {
     Spine::WriteLock lock(itsMutex);
     Contents contents;
-    contents.producer = theProducer;
-    contents.bbox = theProducer.bbox;  // Configured override, if any
-    itsProducers.insert({theProducer.name, contents});
+    contents.product = theProduct;
+    contents.bbox = theProduct.bbox;  // Configured override, if any
+    itsProducts.insert({make_key(theProduct.producer, theProduct.parameter), contents});
   }
   catch (...)
   {
-    throw Fmi::Exception::Trace(BCP, "Failed to add satellite producer");
+    throw Fmi::Exception::Trace(BCP, "Failed to add a satellite product");
   }
 }
 
@@ -37,14 +47,14 @@ void Repository::add(const Producer& theProducer)
  */
 // ----------------------------------------------------------------------
 
-void Repository::insert(const std::string& theProducer, const ImageInfoPtr& theImage)
+void Repository::insert(const ProductKey& theKey, const ImageInfoPtr& theImage)
 {
   try
   {
     Spine::WriteLock lock(itsMutex);
 
-    auto pos = itsProducers.find(theProducer);
-    if (pos == itsProducers.end())
+    auto pos = itsProducts.find(theKey);
+    if (pos == itsProducts.end())
       return;
 
     auto& contents = pos->second;
@@ -52,7 +62,7 @@ void Repository::insert(const std::string& theProducer, const ImageInfoPtr& theI
 
     // The newest image defines the estimated bounding box unless the
     // configuration overrides it
-    if (!contents.producer.bbox && theImage->time == contents.images.rbegin()->first)
+    if (!contents.product.bbox && theImage->time == contents.images.rbegin()->first)
       contents.bbox = theImage->bbox;
 
     limitSize(contents);
@@ -60,7 +70,7 @@ void Repository::insert(const std::string& theProducer, const ImageInfoPtr& theI
   catch (...)
   {
     throw Fmi::Exception::Trace(BCP, "Failed to insert a satellite image")
-        .addParameter("Producer", theProducer);
+        .addParameter("Product", describe(theKey));
   }
 }
 
@@ -70,14 +80,14 @@ void Repository::insert(const std::string& theProducer, const ImageInfoPtr& theI
  */
 // ----------------------------------------------------------------------
 
-void Repository::remove(const std::string& theProducer, const std::string& thePath)
+void Repository::remove(const ProductKey& theKey, const std::string& thePath)
 {
   try
   {
     Spine::WriteLock lock(itsMutex);
 
-    auto pos = itsProducers.find(theProducer);
-    if (pos == itsProducers.end())
+    auto pos = itsProducts.find(theKey);
+    if (pos == itsProducts.end())
       return;
 
     // Removals are rare, hence a linear search by path is acceptable
@@ -94,7 +104,7 @@ void Repository::remove(const std::string& theProducer, const std::string& thePa
   catch (...)
   {
     throw Fmi::Exception::Trace(BCP, "Failed to remove a satellite image")
-        .addParameter("Producer", theProducer);
+        .addParameter("Product", describe(theKey));
   }
 }
 
@@ -102,7 +112,7 @@ void Repository::remove(const std::string& theProducer, const std::string& thePa
 
 void Repository::limitSize(Contents& theContents)
 {
-  const auto max_files = theContents.producer.max_files;
+  const auto max_files = theContents.product.max_files;
   if (max_files == 0)
     return;
 
@@ -112,14 +122,46 @@ void Repository::limitSize(Contents& theContents)
 }
 
 // ----------------------------------------------------------------------
+/*!
+ * \brief The satellites available, sorted and without duplicates
+ */
+// ----------------------------------------------------------------------
 
 std::vector<std::string> Repository::producers() const
 {
   Spine::ReadLock lock(itsMutex);
+
+  std::set<std::string> names;
+  for (const auto& product : itsProducts)
+    names.insert(product.first.first);
+
+  return {names.begin(), names.end()};
+}
+
+// ----------------------------------------------------------------------
+/*!
+ * \brief The parameters available for one satellite
+ *
+ * This is what a client needs to build a menu of the composites of one
+ * satellite.
+ */
+// ----------------------------------------------------------------------
+
+std::vector<std::string> Repository::parameters(const std::string& theProducer) const
+{
+  Spine::ReadLock lock(itsMutex);
+
   std::vector<std::string> ret;
-  ret.reserve(itsProducers.size());
-  for (const auto& producer : itsProducers)
-    ret.push_back(producer.first);
+
+  // The map is sorted by producer first, hence the parameters of one
+  // producer are consecutive and already in order
+  for (auto pos = itsProducts.lower_bound(make_key(theProducer, std::string()));
+       pos != itsProducts.end() && pos->first.first == theProducer;
+       ++pos)
+  {
+    ret.push_back(pos->first.second);
+  }
+
   return ret;
 }
 
@@ -128,48 +170,59 @@ std::vector<std::string> Repository::producers() const
 bool Repository::hasProducer(const std::string& theProducer) const
 {
   Spine::ReadLock lock(itsMutex);
-  return itsProducers.find(theProducer) != itsProducers.end();
+
+  auto pos = itsProducts.lower_bound(make_key(theProducer, std::string()));
+  return pos != itsProducts.end() && pos->first.first == theProducer;
 }
 
 // ----------------------------------------------------------------------
 
-ProducerInfo Repository::producerInfo(const std::string& theProducer) const
+bool Repository::hasProduct(const ProductKey& theKey) const
+{
+  Spine::ReadLock lock(itsMutex);
+  return itsProducts.find(theKey) != itsProducts.end();
+}
+
+// ----------------------------------------------------------------------
+
+ProductInfo Repository::productInfo(const ProductKey& theKey) const
 {
   try
   {
     Spine::ReadLock lock(itsMutex);
 
-    auto pos = itsProducers.find(theProducer);
-    if (pos == itsProducers.end())
-      throw Fmi::Exception(BCP, "Unknown satellite producer '" + theProducer + "'");
+    auto pos = itsProducts.find(theKey);
+    if (pos == itsProducts.end())
+      throw Fmi::Exception(BCP, "Unknown satellite product '" + describe(theKey) + "'");
 
     const auto& contents = pos->second;
 
-    ProducerInfo info;
-    info.name = contents.producer.name;
-    info.title = contents.producer.title;
-    info.abstract = contents.producer.abstract;
-    info.keywords = contents.producer.keywords;
+    ProductInfo info;
+    info.producer = contents.product.producer;
+    info.parameter = contents.product.parameter;
+    info.title = contents.product.title;
+    info.abstract = contents.product.abstract;
+    info.keywords = contents.product.keywords;
     info.bbox = contents.bbox;
     return info;
   }
   catch (...)
   {
-    throw Fmi::Exception::Trace(BCP, "Failed to get satellite producer information")
-        .addParameter("Producer", theProducer);
+    throw Fmi::Exception::Trace(BCP, "Failed to get satellite product information")
+        .addParameter("Product", describe(theKey));
   }
 }
 
 // ----------------------------------------------------------------------
 
-std::vector<Fmi::DateTime> Repository::times(const std::string& theProducer) const
+std::vector<Fmi::DateTime> Repository::times(const ProductKey& theKey) const
 {
   Spine::ReadLock lock(itsMutex);
 
   std::vector<Fmi::DateTime> ret;
 
-  auto pos = itsProducers.find(theProducer);
-  if (pos == itsProducers.end())
+  auto pos = itsProducts.find(theKey);
+  if (pos == itsProducts.end())
     return ret;
 
   ret.reserve(pos->second.images.size());
@@ -181,12 +234,12 @@ std::vector<Fmi::DateTime> Repository::times(const std::string& theProducer) con
 
 // ----------------------------------------------------------------------
 
-Fmi::DateTime Repository::latestTime(const std::string& theProducer) const
+Fmi::DateTime Repository::latestTime(const ProductKey& theKey) const
 {
   Spine::ReadLock lock(itsMutex);
 
-  auto pos = itsProducers.find(theProducer);
-  if (pos == itsProducers.end() || pos->second.images.empty())
+  auto pos = itsProducts.find(theKey);
+  if (pos == itsProducts.end() || pos->second.images.empty())
     return {};  // NOT_A_DATE_TIME
 
   return pos->second.images.rbegin()->first;
@@ -194,12 +247,12 @@ Fmi::DateTime Repository::latestTime(const std::string& theProducer) const
 
 // ----------------------------------------------------------------------
 
-std::size_t Repository::size(const std::string& theProducer) const
+std::size_t Repository::size(const ProductKey& theKey) const
 {
   Spine::ReadLock lock(itsMutex);
 
-  auto pos = itsProducers.find(theProducer);
-  if (pos == itsProducers.end())
+  auto pos = itsProducts.find(theKey);
+  if (pos == itsProducts.end())
     return 0;
 
   return pos->second.images.size();
@@ -211,7 +264,7 @@ std::size_t Repository::size(const std::string& theProducer) const
  */
 // ----------------------------------------------------------------------
 
-ImageInfoPtr Repository::find(const std::string& theProducer,
+ImageInfoPtr Repository::find(const ProductKey& theKey,
                               const std::optional<Fmi::DateTime>& theTime,
                               const Fmi::TimeDuration& theTolerance) const
 {
@@ -219,8 +272,8 @@ ImageInfoPtr Repository::find(const std::string& theProducer,
   {
     Spine::ReadLock lock(itsMutex);
 
-    auto pos = itsProducers.find(theProducer);
-    if (pos == itsProducers.end())
+    auto pos = itsProducts.find(theKey);
+    if (pos == itsProducts.end())
       return nullptr;
 
     const auto& images = pos->second.images;
@@ -272,7 +325,7 @@ ImageInfoPtr Repository::find(const std::string& theProducer,
   catch (...)
   {
     throw Fmi::Exception::Trace(BCP, "Failed to find a satellite image")
-        .addParameter("Producer", theProducer);
+        .addParameter("Product", describe(theKey));
   }
 }
 

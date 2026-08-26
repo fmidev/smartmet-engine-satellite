@@ -13,20 +13,29 @@ projection requested by the client.
 
 ## Concepts
 
-One **producer** is one composite of one instrument in one projection,
-for example the natural colour composite of SEVIRI in EPSG:3035. The
-producer name identifies the data completely: there is no parameter to
-choose. In the WMS plugin this is a satellite layer:
+A **product** is identified by a **producer** and a **parameter**: the
+producer says which satellite or data stream the images come from, and
+the parameter says which composite of it. In the WMS plugin this is a
+satellite layer:
 
 ```json
-{ "layer_type": "satellite", "producer": "meteosat_natural" }
+{ "layer_type": "satellite", "producer": "meteosat", "parameter": "natural" }
 ```
 
-A producer is a directory plus a file name pattern, because one directory
-holds many composites of many times. The valid time is parsed from the
-beginning of the file name, which the production system writes in the
-form `YYYYMMDD_HHMM_Platform_area_composite.tif`. Note that the platform
-is not part of the producer identity: the EARS products alternate between
+Splitting the identity in two is what makes menus easy to build: a client
+lists the producers, and then the parameters of the one the user picked.
+
+```cpp
+for (const auto& producer : engine.producers())
+  for (const auto& parameter : engine.parameters(producer))
+    ...engine.productInfo(producer, parameter).title...
+```
+
+Each product is a directory plus a file name pattern, because one
+directory holds many composites of many times. The valid time is parsed
+from the beginning of the file name, which the production system writes
+in the form `YYYYMMDD_HHMM_Platform_area_composite.tif`. Note that the
+platform is not part of the identity: the EARS products alternate between
 Metop-B and Metop-C from one pass to the next.
 
 ## Configuration
@@ -34,21 +43,38 @@ Metop-B and Metop-C from one pass to the next.
 ```
 rootdir = "/smartmet/satellite/weather";
 
-producers:
+products:
 {
-  meteosat_natural:
+  meteosat_natural:                                 # any unique name
   {
+    producer  = "meteosat";                         # the satellite
+    parameter = "natural";                          # the composite
     directory = "seviri/0deg/level3/EPSG3035/img";   # relative to rootdir
     pattern   = ".*_natural_with_colorized_ir_clouds\\.tif$";
-    title     = "Meteosat natural colours";
+    title     = "Natural colours";
     abstract  = "SEVIRI natural colour composite";
     keywords  = ["satellite", "seviri", "meteosat"];
     refresh_interval_secs = 60;   # directory scan interval, default 60
     max_files = 200;              # keep this many newest images, 0 = all
     # bbox = [-45.0, 27.6, 63.3, 68.1];   # WGS84 override of the estimate
   };
+
+  meteosat_ir108:                                   # same satellite, another composite
+  {
+    producer  = "meteosat";
+    parameter = "ir108";
+    directory = "seviri/0deg/level3/geos/img";
+    pattern   = ".*_geos_ir108\\.tif$";
+    title     = "Infrared 10.8 um";
+  };
 };
 ```
+
+The name of the configuration group is free and is used only in error
+messages; the producer and parameter pair is the identity, and the same
+pair must not appear twice. The same parameter name may of course be used
+by several producers, which is the point: `meteosat/ir108` and
+`metop/ir108` are different products.
 
 The `pattern` must match the **whole** file name, hence the leading
 `.*`. The `title`, `abstract` and `keywords` end up in the WMS

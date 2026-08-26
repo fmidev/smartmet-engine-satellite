@@ -2,7 +2,7 @@
 /*!
  * \brief Directory scanner keeping the image catalog up to date
  *
- * One directory monitor watches all configured producer directories.
+ * One directory monitor watches all configured product directories.
  * New files are read for their metadata and inserted into the
  * repository, deleted files are removed from it.
  */
@@ -10,7 +10,7 @@
 
 #pragma once
 
-#include "Producer.h"
+#include "Product.h"
 #include "Repository.h"
 #include <boost/thread.hpp>
 #include <macgyver/DirectoryMonitor.h>
@@ -35,9 +35,9 @@ class Scanner
   Scanner(Scanner&&) = delete;
   Scanner& operator=(Scanner&&) = delete;
 
-  // Start watching the directories of the given producers. Returns when
+  // Start watching the directories of the given products. Returns when
   // the first scan of every directory has completed.
-  void start(const std::map<std::string, Producer>& theProducers);
+  void start(const std::map<ProductKey, Product>& theProducts);
 
   void stop();
 
@@ -64,9 +64,9 @@ class Scanner
   Fmi::DirectoryMonitor itsMonitor;
   boost::thread itsMonitorThread;
 
-  // Watcher identity to producer name. Written before the monitor is
-  // started, read only afterwards.
-  std::map<Fmi::DirectoryMonitor::Watcher, std::string> itsWatchers;
+  // Watcher identity to the product it belongs to. Written before the
+  // monitor is started, read only afterwards.
+  std::map<Fmi::DirectoryMonitor::Watcher, ProductKey> itsWatchers;
 
   std::atomic<bool> itsShutdownRequested{false};
 };

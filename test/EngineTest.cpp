@@ -1,6 +1,7 @@
 #include "Engine.h"
 #include <macgyver/DateTime.h>
 #include <macgyver/StringConversion.h>
+#include <boost/algorithm/string/join.hpp>
 #include <regression/tframe.h>
 #include <spine/Options.h>
 #include <spine/Reactor.h>
@@ -23,13 +24,32 @@ using namespace SmartMet::Engine::Satellite;
 
 // The producers of the test configuration
 
-const std::string rgba_producer = "meteosat_natural";
-const std::string grayalpha_producer = "metop_avhrr_ir108";
-const std::string cog_producer = "goes_east_truecolor";
-const std::string geos_producer = "meteosat_geos_ir108";
-const std::string float_producer = "nwcsaf_ctth_tempe";
-const std::string series_producer = "meteosat_fog_rgb";
-const std::string livescan_producer = "livescan";
+// Products are addressed by a producer and a parameter
+const ProductKey rgba_product = {"meteosat", "natural"};
+const ProductKey grayalpha_product = {"metop", "ir108"};
+const ProductKey cog_product = {"goes-east", "truecolor"};
+const ProductKey geos_product = {"meteosat", "ir108"};
+const ProductKey float_product = {"meteosat", "ctth_tempe"};
+const ProductKey series_product = {"meteosat", "fog_rgb"};
+const ProductKey livescan_product = {"testsat", "livescan"};
+
+std::string name_of(const ProductKey& key)
+{
+  return key.first + "/" + key.second;
+}
+
+// Shorthands so that the tests read the same as before
+ImageInfoPtr find_image(const ProductKey& key,
+                        const std::optional<Fmi::DateTime>& time,
+                        const Fmi::TimeDuration& tolerance)
+{
+  return satellite->find(key.first, key.second, time, tolerance);
+}
+
+std::vector<Fmi::DateTime> times_of(const ProductKey& key)
+{
+  return satellite->times(key.first, key.second);
+}
 
 // ----------------------------------------------------------------------
 
@@ -37,12 +57,13 @@ void producers()
 {
   auto names = satellite->producers();
 
-  if (names.size() != 7)
-    TEST_FAILED("Expected 7 producers, got " + Fmi::to_string(names.size()));
+  const std::vector<std::string> expected = {"goes-east", "meteosat", "metop", "testsat"};
+  if (names != expected)
+    TEST_FAILED("Expected the producers " + boost::algorithm::join(expected, ",") + ", got " +
+                boost::algorithm::join(names, ","));
 
-  for (const auto& name : {rgba_producer, grayalpha_producer, cog_producer, geos_producer})
-    if (!satellite->hasProducer(name))
-      TEST_FAILED("Producer '" + name + "' is missing");
+  if (!satellite->hasProducer("meteosat"))
+    TEST_FAILED("Producer 'meteosat' is missing");
 
   if (satellite->hasProducer("no_such_producer"))
     TEST_FAILED("Reported an unknown producer to exist");
@@ -51,26 +72,62 @@ void producers()
 }
 
 // ----------------------------------------------------------------------
+/*!
+ * \brief The parameters of a producer, which is the second menu level
+ */
+// ----------------------------------------------------------------------
+
+void menu_parameters()
+{
+  auto params = satellite->parameters("meteosat");
+
+  const std::vector<std::string> expected = {"ctth_tempe", "fog_rgb", "ir108", "natural"};
+  if (params != expected)
+    TEST_FAILED("Expected the parameters " + boost::algorithm::join(expected, ",") + ", got " +
+                boost::algorithm::join(params, ","));
+
+  // Another satellite must not see them
+  auto others = satellite->parameters("goes-east");
+  if (others.size() != 1 || others[0] != "truecolor")
+    TEST_FAILED("The parameters of goes-east are wrong");
+
+  if (!satellite->parameters("no_such_producer").empty())
+    TEST_FAILED("Found parameters for an unknown producer");
+
+  // The same parameter name may belong to several satellites
+  if (!satellite->hasProduct("meteosat", "ir108") || !satellite->hasProduct("metop", "ir108"))
+    TEST_FAILED("The ir108 parameter is missing from meteosat or metop");
+
+  // But not every combination exists
+  if (satellite->hasProduct("metop", "natural"))
+    TEST_FAILED("Reported a product which is not configured");
+  if (satellite->hasProduct("meteosat", "no_such_parameter"))
+    TEST_FAILED("Reported an unknown parameter to exist");
+
+  TEST_PASSED();
+}
+
+// ----------------------------------------------------------------------
 
 void times()
 {
-  for (const auto& producer : {rgba_producer, grayalpha_producer, cog_producer, geos_producer})
+  for (const auto& product : {rgba_product, grayalpha_product, cog_product, geos_product})
   {
-    auto times = satellite->times(producer);
+    auto times = times_of(product);
 
     if (times.empty())
-      TEST_FAILED("No times found for producer '" + producer + "'");
+      TEST_FAILED("No times found for product '" + name_of(product) + "'");
 
     // The times must be sorted and unique
     for (std::size_t i = 1; i < times.size(); i++)
       if (times[i - 1] >= times[i])
-        TEST_FAILED("The times of '" + producer + "' are not sorted");
+        TEST_FAILED("The times of '" + name_of(product) + "' are not sorted");
 
-    if (satellite->latestTime(producer) != times.back())
-      TEST_FAILED("The latest time of '" + producer + "' is not the last one");
+    if (satellite->latestTime(product.first, product.second) != times.back())
+      TEST_FAILED("The latest time of '" + name_of(product) + "' is not the last one");
   }
 
-  if (!satellite->times("no_such_producer").empty())
+  if (!satellite->times("no_such_producer", "x").empty())
     TEST_FAILED("Found times for an unknown producer");
 
   TEST_PASSED();
@@ -121,40 +178,40 @@ void parse_time()
 
 void find()
 {
-  auto times = satellite->times(rgba_producer);
+  auto times = times_of(rgba_product);
   if (times.empty())
-    TEST_FAILED("No images available for '" + rgba_producer + "'");
+    TEST_FAILED("No images available for '" + name_of(rgba_product) + "'");
 
   // The latest image
-  auto latest = satellite->find(rgba_producer, {}, Fmi::TimeDuration(0, 0, 0));
+  auto latest = find_image(rgba_product, {}, Fmi::TimeDuration(0, 0, 0));
   if (!latest)
     TEST_FAILED("Failed to find the latest image");
   if (latest->time != times.back())
     TEST_FAILED("Found the wrong image as the latest one");
 
   // Exact time
-  auto exact = satellite->find(rgba_producer, times.front(), Fmi::TimeDuration(0, 0, 0));
+  auto exact = find_image(rgba_product, times.front(), Fmi::TimeDuration(0, 0, 0));
   if (!exact)
     TEST_FAILED("Failed to find an image by its exact time");
   if (exact->time != times.front())
     TEST_FAILED("Found the wrong image with an exact time");
 
   // A time between the images with a tolerance small enough to fail
-  auto missing = satellite->find(
-      rgba_producer, times.back() + Fmi::TimeDuration(10, 0, 0), Fmi::TimeDuration(0, 1, 0));
+  auto missing = find_image(
+      rgba_product, times.back() + Fmi::TimeDuration(10, 0, 0), Fmi::TimeDuration(0, 1, 0));
   if (missing)
     TEST_FAILED("Found an image ten hours away with a one minute tolerance");
 
   // The same time with a tolerance large enough to succeed
-  auto found = satellite->find(
-      rgba_producer, times.back() + Fmi::TimeDuration(10, 0, 0), Fmi::TimeDuration(24, 0, 0));
+  auto found = find_image(
+      rgba_product, times.back() + Fmi::TimeDuration(10, 0, 0), Fmi::TimeDuration(24, 0, 0));
   if (!found)
     TEST_FAILED("Failed to find an image with a 24 hour tolerance");
   if (found->time != times.back())
     TEST_FAILED("Found the wrong image with a large tolerance");
 
   // Unknown producer
-  if (satellite->find("no_such_producer", {}, Fmi::TimeDuration(0, 0, 0)))
+  if (satellite->find("no_such_producer", "x", {}, Fmi::TimeDuration(0, 0, 0)))
     TEST_FAILED("Found an image of an unknown producer");
 
   TEST_PASSED();
@@ -166,7 +223,7 @@ void metadata()
 {
   // RGBA in EPSG:3035
 
-  auto rgba = satellite->find(rgba_producer, {}, Fmi::TimeDuration(0, 0, 0));
+  auto rgba = find_image(rgba_product, {}, Fmi::TimeDuration(0, 0, 0));
   if (!rgba)
     TEST_FAILED("Failed to find an RGBA image");
   if (rgba->model != BandModel::RGBA)
@@ -184,7 +241,7 @@ void metadata()
 
   // Gray + alpha
 
-  auto gray = satellite->find(grayalpha_producer, {}, Fmi::TimeDuration(0, 0, 0));
+  auto gray = find_image(grayalpha_product, {}, Fmi::TimeDuration(0, 0, 0));
   if (!gray)
     TEST_FAILED("Failed to find a gray+alpha image");
   if (gray->model != BandModel::GrayAlpha)
@@ -194,7 +251,7 @@ void metadata()
 
   // The geostationary projection
 
-  auto geos = satellite->find(geos_producer, {}, Fmi::TimeDuration(0, 0, 0));
+  auto geos = find_image(geos_product, {}, Fmi::TimeDuration(0, 0, 0));
   if (!geos)
     TEST_FAILED("Failed to find a geostationary image");
   if (geos->wkt.find("Geostationary") == std::string::npos)
@@ -213,7 +270,7 @@ void metadata()
 
   // Uncoloured data must be recognized
 
-  auto uncoloured = satellite->find(float_producer, {}, Fmi::TimeDuration(0, 0, 0));
+  auto uncoloured = find_image(float_product, {}, Fmi::TimeDuration(0, 0, 0));
   if (!uncoloured)
     TEST_FAILED("Failed to find an uncoloured image");
   if (uncoloured->model != BandModel::Float)
@@ -241,9 +298,9 @@ std::size_t opaque_pixels(const Image& image)
 
 void warp_same_projection()
 {
-  auto info = satellite->find(rgba_producer, {}, Fmi::TimeDuration(0, 0, 0));
+  auto info = find_image(rgba_product, {}, Fmi::TimeDuration(0, 0, 0));
   if (!info)
-    TEST_FAILED("No image available for '" + rgba_producer + "'");
+    TEST_FAILED("No image available for '" + name_of(rgba_product) + "'");
 
   // The native bounding box of the EPSG:3035 products
   WarpOptions options;
@@ -274,9 +331,9 @@ void warp_same_projection()
 
 void warp_web_mercator()
 {
-  auto info = satellite->find(rgba_producer, {}, Fmi::TimeDuration(0, 0, 0));
+  auto info = find_image(rgba_product, {}, Fmi::TimeDuration(0, 0, 0));
   if (!info)
-    TEST_FAILED("No image available for '" + rgba_producer + "'");
+    TEST_FAILED("No image available for '" + name_of(rgba_product) + "'");
 
   // A web mercator tile over Finland
   WarpOptions options;
@@ -297,9 +354,9 @@ void warp_web_mercator()
 
 void warp_outside_data()
 {
-  auto info = satellite->find(rgba_producer, {}, Fmi::TimeDuration(0, 0, 0));
+  auto info = find_image(rgba_product, {}, Fmi::TimeDuration(0, 0, 0));
   if (!info)
-    TEST_FAILED("No image available for '" + rgba_producer + "'");
+    TEST_FAILED("No image available for '" + name_of(rgba_product) + "'");
 
   // A tile in the Pacific: the European product has no data there, and
   // the result must be transparent rather than an error
@@ -322,9 +379,9 @@ void warp_outside_data()
 
 void warp_gray_alpha()
 {
-  auto info = satellite->find(grayalpha_producer, {}, Fmi::TimeDuration(0, 0, 0));
+  auto info = find_image(grayalpha_product, {}, Fmi::TimeDuration(0, 0, 0));
   if (!info)
-    TEST_FAILED("No image available for '" + grayalpha_producer + "'");
+    TEST_FAILED("No image available for '" + name_of(grayalpha_product) + "'");
 
   // The AVHRR products are single satellite passes: only a diagonal
   // swath of the European window has data, and its location depends on
@@ -371,9 +428,9 @@ void warp_gray_alpha()
 
 void warp_geostationary()
 {
-  auto info = satellite->find(geos_producer, {}, Fmi::TimeDuration(0, 0, 0));
+  auto info = find_image(geos_product, {}, Fmi::TimeDuration(0, 0, 0));
   if (!info)
-    TEST_FAILED("No image available for '" + geos_producer + "'");
+    TEST_FAILED("No image available for '" + name_of(geos_product) + "'");
 
   // The whole disc in web mercator, which is the hardest case: the
   // projection is not defined outside the disc
@@ -408,7 +465,7 @@ void warp_geostationary()
 
 void warp_uses_overviews()
 {
-  auto info = satellite->find(cog_producer, {}, Fmi::TimeDuration(0, 0, 0));
+  auto info = find_image(cog_product, {}, Fmi::TimeDuration(0, 0, 0));
   if (!info)
     TEST_FAILED("Failed to find a cloud optimized GeoTIFF");
 
@@ -442,9 +499,9 @@ void warp_uses_overviews()
 
 void warp_uncoloured_data_fails()
 {
-  auto info = satellite->find(float_producer, {}, Fmi::TimeDuration(0, 0, 0));
+  auto info = find_image(float_product, {}, Fmi::TimeDuration(0, 0, 0));
   if (!info)
-    TEST_FAILED("No image available for '" + float_producer + "'");
+    TEST_FAILED("No image available for '" + name_of(float_product) + "'");
 
   WarpOptions options;
   options.crs = "EPSG:3035";
@@ -473,20 +530,20 @@ void warp_uncoloured_data_fails()
 
 void time_series()
 {
-  auto times = satellite->times(series_producer);
+  auto times = times_of(series_product);
 
   if (times.size() < 2)
-    TEST_FAILED("Expected several images for '" + series_producer + "', got " +
+    TEST_FAILED("Expected several images for '" + name_of(series_product) + "', got " +
                 Fmi::to_string(times.size()));
 
-  if (satellite->imageCount(series_producer) != times.size())
+  if (satellite->imageCount(series_product.first, series_product.second) != times.size())
     TEST_FAILED("The image count does not match the number of times");
 
   // Every image must be found by its own time, and must be the one whose
   // time was asked for
   for (const auto& t : times)
   {
-    auto image = satellite->find(series_producer, t, Fmi::TimeDuration(0, 0, 0));
+    auto image = find_image(series_product, t, Fmi::TimeDuration(0, 0, 0));
     if (!image)
       TEST_FAILED("Failed to find the image of " + Fmi::to_iso_string(t));
     if (image->time != t)
@@ -497,7 +554,7 @@ void time_series()
   // Every image is a separate file, hence the hashes must differ
   std::set<std::size_t> hashes;
   for (const auto& t : times)
-    hashes.insert(satellite->find(series_producer, t, Fmi::TimeDuration(0, 0, 0))->hash);
+    hashes.insert(find_image(series_product, t, Fmi::TimeDuration(0, 0, 0))->hash);
 
   if (hashes.size() != times.size())
     TEST_FAILED("The images of different times have equal hash values");
@@ -510,7 +567,7 @@ void time_series()
   if (step > 0)
   {
     auto just_after = t1 + Fmi::Seconds(step / 4);
-    auto image = satellite->find(series_producer, just_after, Fmi::TimeDuration(24, 0, 0));
+    auto image = find_image(series_product, just_after, Fmi::TimeDuration(24, 0, 0));
     if (!image)
       TEST_FAILED("Failed to find an image close to the first one");
     if (image->time != t1)
@@ -518,7 +575,7 @@ void time_series()
                   Fmi::to_iso_string(image->time) + " instead of " + Fmi::to_iso_string(t1));
 
     auto just_before = t2 - Fmi::Seconds(step / 4);
-    image = satellite->find(series_producer, just_before, Fmi::TimeDuration(24, 0, 0));
+    image = find_image(series_product, just_before, Fmi::TimeDuration(24, 0, 0));
     if (!image)
       TEST_FAILED("Failed to find an image close to the second one");
     if (image->time != t2)
@@ -540,26 +597,26 @@ void warp_speed()
   struct Case
   {
     std::string label;
-    std::string producer;
+    ProductKey product;
     std::array<double, 4> bbox;
     int size;
   };
 
   const std::vector<Case> cases = {
-      {"256x256   EPSG:3857 zoom-in ", rgba_producer, {2504688, 8140237, 3130860, 8766409}, 256},
-      {"512x512   EPSG:3857 zoom-in ", rgba_producer, {2504688, 8140237, 3130860, 8766409}, 512},
-      {"1024x1024 EPSG:3857 zoom-in ", rgba_producer, {2504688, 8140237, 3130860, 8766409}, 1024},
-      {"1024x1024 EPSG:3857 europe  ", rgba_producer, {-5000000, 3000000, 6000000, 12000000}, 1024},
-      {"256x256   whole Earth COG   ", cog_producer, {-20037508, -20037508, 20037508, 20037508}, 256},
-      {"512x512   geos full disc    ", geos_producer, {-20037508, -20037508, 20037508, 20037508}, 512}};
+      {"256x256   EPSG:3857 zoom-in ", rgba_product, {2504688, 8140237, 3130860, 8766409}, 256},
+      {"512x512   EPSG:3857 zoom-in ", rgba_product, {2504688, 8140237, 3130860, 8766409}, 512},
+      {"1024x1024 EPSG:3857 zoom-in ", rgba_product, {2504688, 8140237, 3130860, 8766409}, 1024},
+      {"1024x1024 EPSG:3857 europe  ", rgba_product, {-5000000, 3000000, 6000000, 12000000}, 1024},
+      {"256x256   whole Earth COG   ", cog_product, {-20037508, -20037508, 20037508, 20037508}, 256},
+      {"512x512   geos full disc    ", geos_product, {-20037508, -20037508, 20037508, 20037508}, 512}};
 
   std::cout << "\n";
 
   for (const auto& c : cases)
   {
-    auto info = satellite->find(c.producer, {}, Fmi::TimeDuration(0, 0, 0));
+    auto info = satellite->find(c.product.first, c.product.second, {}, Fmi::TimeDuration(0, 0, 0));
     if (!info)
-      TEST_FAILED("No image available for '" + c.producer + "'");
+      TEST_FAILED("No image available for '" + name_of(c.product) + "'");
 
     WarpOptions options;
     options.crs = "EPSG:3857";
@@ -601,13 +658,13 @@ void live_scan()
     TEST_FAILED("SATELLITE_SCAN_DIR is not set");
 
   // The directory starts out empty
-  if (satellite->imageCount(livescan_producer) != 0)
+  if (satellite->imageCount(livescan_product.first, livescan_product.second) != 0)
     TEST_FAILED("The live scan directory was not empty at the start");
 
   // Take a real image as the source
-  auto source = satellite->find(series_producer, {}, Fmi::TimeDuration(0, 0, 0));
+  auto source = find_image(series_product, {}, Fmi::TimeDuration(0, 0, 0));
   if (!source)
-    TEST_FAILED("No image available for '" + series_producer + "'");
+    TEST_FAILED("No image available for '" + name_of(series_product) + "'");
 
   const std::filesystem::path target =
       std::filesystem::path(dir) / "20230929_2100_Meteosat-10_fog_rgb_ir.tif";
@@ -627,14 +684,14 @@ void live_scan()
     return false;
   };
 
-  if (!wait_for([]() { return satellite->imageCount(livescan_producer) == 1; }))
+  if (!wait_for([]() { return satellite->imageCount(livescan_product.first, livescan_product.second) == 1; }))
   {
     std::filesystem::remove(target);
     TEST_FAILED("The new file was not noticed within 20 seconds");
   }
 
   // The image must be usable, not merely counted
-  auto found = satellite->find(livescan_producer, {}, Fmi::TimeDuration(0, 0, 0));
+  auto found = find_image(livescan_product, {}, Fmi::TimeDuration(0, 0, 0));
   if (!found)
     TEST_FAILED("The new image was counted but cannot be found");
   if (Fmi::to_iso_string(found->time) != "20230929T210000")
@@ -647,7 +704,7 @@ void live_scan()
   // And a deleted file must disappear
   std::filesystem::remove(target);
 
-  if (!wait_for([]() { return satellite->imageCount(livescan_producer) == 0; }))
+  if (!wait_for([]() { return satellite->imageCount(livescan_product.first, livescan_product.second) == 0; }))
     TEST_FAILED("The deleted file was not forgotten within 20 seconds");
 
   TEST_PASSED();
@@ -662,6 +719,7 @@ class tests : public tframe::tests
   void test()
   {
     TEST(producers);
+    TEST(menu_parameters);
     TEST(times);
     TEST(parse_time);
     TEST(find);

@@ -75,29 +75,29 @@ Fmi::DateTime Scanner::parseTime(const std::string& theFileName)
 
 // ----------------------------------------------------------------------
 /*!
- * \brief Start watching the producer directories
+ * \brief Start watching the product directories
  */
 // ----------------------------------------------------------------------
 
-void Scanner::start(const std::map<std::string, Producer>& theProducers)
+void Scanner::start(const std::map<ProductKey, Product>& theProducts)
 {
   try
   {
-    for (const auto& [name, producer] : theProducers)
+    for (const auto& [key, product] : theProducts)
     {
-      if (!std::filesystem::is_directory(producer.directory))
+      if (!std::filesystem::is_directory(product.directory))
       {
-        // A missing directory must not prevent the other producers from
-        // working. The producer will simply have no images.
-        std::cerr << fmt::format("Warning: satellite producer '{}' directory '{}' does not exist\n",
-                                 name,
-                                 producer.directory.string());
+        // A missing directory must not prevent the other products from
+        // working. The product will simply have no images.
+        std::cerr << fmt::format("Warning: satellite product '{}' directory '{}' does not exist\n",
+                                 product.id,
+                                 product.directory.string());
         continue;
       }
 
       auto watcher = itsMonitor.watch(
-          producer.directory,
-          producer.regex,
+          product.directory,
+          product.regex,
           [this](Fmi::DirectoryMonitor::Watcher id,
                  const std::filesystem::path& path,
                  const boost::regex& pattern,
@@ -107,11 +107,11 @@ void Scanner::start(const std::map<std::string, Producer>& theProducers)
                  const std::filesystem::path& path,
                  const boost::regex& pattern,
                  const std::string& message) { this->error(id, path, pattern, message); },
-          producer.refresh_interval_secs,
+          product.refresh_interval_secs,
           Fmi::DirectoryMonitor::CREATE | Fmi::DirectoryMonitor::DELETE |
               Fmi::DirectoryMonitor::MODIFY);
 
-      itsWatchers.insert({watcher, name});
+      itsWatchers.insert({watcher, key});
     }
 
     if (itsWatchers.empty())
@@ -171,7 +171,7 @@ void Scanner::update(Fmi::DirectoryMonitor::Watcher theWatcher,
     if (pos == itsWatchers.end())
       return;
 
-    const auto& producer = pos->second;
+    const auto& key = pos->second;
 
     for (const auto& [path, change] : *theStatus)
     {
@@ -179,7 +179,7 @@ void Scanner::update(Fmi::DirectoryMonitor::Watcher theWatcher,
         return;
 
       if ((change & (Fmi::DirectoryMonitor::DELETE | Fmi::DirectoryMonitor::MODIFY)) != 0)
-        itsRepository.remove(producer, path.string());
+        itsRepository.remove(key, path.string());
 
       if ((change & (Fmi::DirectoryMonitor::CREATE | Fmi::DirectoryMonitor::MODIFY)) != 0)
       {
@@ -190,7 +190,7 @@ void Scanner::update(Fmi::DirectoryMonitor::Watcher theWatcher,
         try
         {
           auto info = std::make_shared<ImageInfo>(Gdal::readMetadata(path.string(), time));
-          itsRepository.insert(producer, info);
+          itsRepository.insert(key, info);
         }
         catch (const std::exception& e)
         {
