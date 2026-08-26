@@ -447,7 +447,10 @@ void set_target_georeference(GDALDatasetH dst,
  */
 // ----------------------------------------------------------------------
 
-DatasetPtr open_source(const ImageInfo& theImage, GDALDatasetH dst, const WarpOptions& theOptions)
+DatasetPtr open_source(const ImageInfo& theImage,
+                       GDALDatasetH dst,
+                       const WarpOptions& theOptions,
+                       int* theOverview)
 {
   DatasetPtr src(GDALOpenEx(
       theImage.path.c_str(), GDAL_OF_RASTER | GDAL_OF_READONLY, nullptr, nullptr, nullptr));
@@ -479,7 +482,16 @@ DatasetPtr open_source(const ImageInfo& theImage, GDALDatasetH dst, const WarpOp
     // opened for some reason
     if (overview_ds)
       src = std::move(overview_ds);
+    else
+      overview = -1;
   }
+
+  // Report the level the pixels really come from rather than the level
+  // which was chosen, by comparing the dataset which ended up being used
+  // against the full resolution size. A report of the intention would
+  // have hidden a broken reopen, and did.
+  if (theOverview != nullptr)
+    *theOverview = (GDALGetRasterXSize(src.get()) == theImage.width) ? -1 : overview;
 
   return src;
 }
@@ -687,7 +699,7 @@ Image warp(const ImageInfo& theImage, const WarpOptions& theOptions)
 
     set_target_georeference(dst.get(), theOptions, dst_wkt);
 
-    auto src = open_source(theImage, dst.get(), theOptions);
+    auto src = open_source(theImage, dst.get(), theOptions, &result.overview);
 
     auto* warpoptions = GDALCreateWarpOptions();
 
@@ -785,7 +797,7 @@ ValueImage warpValues(const ImageInfo& theImage, const WarpOptions& theOptions)
 
     set_target_georeference(dst.get(), theOptions, dst_wkt);
 
-    auto src = open_source(theImage, dst.get(), theOptions);
+    auto src = open_source(theImage, dst.get(), theOptions, nullptr);
 
     auto* warpoptions = GDALCreateWarpOptions();
 

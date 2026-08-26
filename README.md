@@ -1,15 +1,34 @@
-# SmartMet satellite engine
+# smartmet-engine-satellite
 
-Serves precoloured satellite imagery to the WMS plugin of the SmartMet
-Server. Unlike the other data sources of the server the images are ready
+Part of [SmartMet Server](https://github.com/fmidev/smartmet-server). See the [SmartMet Server documentation](https://github.com/fmidev/smartmet-server) for a full overview of the ecosystem.
+
+## Overview
+
+The satellite engine serves precoloured satellite imagery to the WMS
+plugin. Unlike the other data sources of the server the images are ready
 for display: the pixels are RGBA and no styling is applied, hence the
-projection transformations use nearest neighbour interpolation.
+projection transformations use nearest neighbour interpolation. The
+images are produced as GeoTIFF files, the larger ones as cloud optimized
+GeoTIFF files with an overview pyramid. The engine watches the configured
+directories, reads the metadata of the files it finds, and serves the
+images warped to the projection the client asked for.
 
-The images are produced as GeoTIFF files by the satellite data
-production system, the larger ones as cloud optimized GeoTIFF files with
-an overview pyramid. The engine watches the configured directories, reads
-the metadata of the files it finds, and serves the images warped to the
-projection requested by the client.
+Only the `satellite` layer type of the WMS plugin uses this engine.
+
+## Features
+
+- Serves any projection GDAL understands, including the native
+  geostationary projection of the satellites and Eckert IV, which has no
+  EPSG code and is described by the embedded WKT only
+- Chooses the overview level which suits the request, so a zoomed out
+  view of a large image does not read full resolution data, and reports
+  in the result which level the pixels came from
+- Precoloured RGBA, RGB, gray plus alpha and gray images
+- Uncoloured values, for example a cloud top temperature in Kelvin, for
+  the caller to colour with a colour map
+- Notices new and deleted images without a restart
+- Gives the WMS plugin an ETag basis which costs no pixel reading, so
+  conditional requests are answered without rendering anything
 
 ## Concepts
 
@@ -205,3 +224,11 @@ production tree:
 ```bash
 make test SATELLITE_TEST_DATA=/smartmet/satellite/weather
 ```
+
+## Documentation
+
+- `docs/poc-benchmarks.md` — measurements: warping, the rendering
+  pipeline, the caching paths, and what the client request pattern means
+  for a cache of decompressed data
+- `docs/wms-poc/` — the WMS plugin test wiring for trying the layer out
+- `CLAUDE.md` — notes for working on the code

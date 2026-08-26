@@ -4,7 +4,7 @@
 Summary: SmartMet satellite engine
 Name: %{SPECNAME}
 Version: 26.8.26
-Release: 4%{?dist}.fmi
+Release: 5%{?dist}.fmi
 License: MIT
 Group: SmartMet/Engines
 URL: https://github.com/fmidev/smartmet-engine-satellite
@@ -83,6 +83,8 @@ rm -rf $RPM_BUILD_ROOT
 %{_includedir}/smartmet/engines/%{DIRNAME}/*.h
 
 %changelog
+* Wed Aug 26 2026 Mika Heiskanen <mika.heiskanen@fmi.fi> 26.8.26-5.fmi
+- The warp result reports which overview level the pixels came from
 * Wed Aug 26 2026 Mika Heiskanen <mika.heiskanen@fmi.fi> 26.8.26-4.fmi
 - Tests use the images of the smartmet-test-data package
 - Silenced the PROJ reports about points which are not on the Earth

@@ -33,6 +33,11 @@ struct Image
   int width{0};
   int height{0};
   std::vector<unsigned int> pixels;
+
+  // Overview level the pixels were read from, -1 for the full resolution
+  // image. Reported because it decides the cost of the request, so it is
+  // worth being able to see it.
+  int overview{-1};
 };
 
 // Uncoloured data warped to the requested projection. Missing values are

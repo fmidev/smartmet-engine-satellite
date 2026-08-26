@@ -491,28 +491,40 @@ void warp_uses_overviews()
   if (!info)
     TEST_FAILED("Failed to find a cloud optimized GeoTIFF");
 
+  // Zoomed out to the whole Earth: one target pixel covers many source
+  // pixels, so an overview must be used. Asserting the level rather than
+  // the elapsed time keeps the test honest on a loaded machine.
   WarpOptions options;
   options.crs = "EPSG:3857";
   options.bbox = {-20037508, -20037508, 20037508, 20037508};
   options.width = 256;
   options.height = 256;
 
-  const auto start = std::chrono::steady_clock::now();
-  auto image = satellite->warp(*info, options);
-  const auto duration = std::chrono::steady_clock::now() - start;
+  auto zoomed_out = satellite->warp(*info, options);
 
-  const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(duration).count();
-
-  if (opaque_pixels(image) == 0)
+  if (opaque_pixels(zoomed_out) == 0)
     TEST_FAILED("The overview tile is fully transparent");
 
-  // Reading the 5108x5542 image at full resolution costs some 400 ms.
-  // Using the overviews it takes about ten.
-  if (ms > 100)
-    TEST_FAILED(fmt::format(
-        "Warping a whole Earth tile took {} ms, the overviews are probably not used", ms));
+  if (zoomed_out.overview < 0)
+    TEST_FAILED("A whole Earth tile was read from the full resolution image");
 
-  std::cout << fmt::format(" ({} ms)", ms) << std::flush;
+  // Zoomed in far enough that the full resolution image is the right
+  // choice: one target pixel is smaller than a source pixel
+  const auto& geotransform = info->geotransform;
+  const double x = geotransform[0] + info->width * geotransform[1] / 2;
+  const double y = geotransform[3] + info->height * geotransform[5] / 2;
+  const double halfwidth = 100 * std::abs(geotransform[1]);
+
+  options.crs = info->wkt;
+  options.bbox = {x - halfwidth, y - halfwidth, x + halfwidth, y + halfwidth};
+  options.width = 256;
+  options.height = 256;
+
+  auto zoomed_in = satellite->warp(*info, options);
+
+  if (zoomed_in.overview != -1)
+    TEST_FAILED(fmt::format("A zoomed in tile was read from overview {} instead of the image",
+                            zoomed_in.overview));
 
   TEST_PASSED();
 }
