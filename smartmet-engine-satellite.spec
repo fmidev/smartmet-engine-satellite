@@ -1,0 +1,88 @@
+%define DIRNAME satellite
+%define LIBNAME smartmet-%{DIRNAME}
+%define SPECNAME smartmet-engine-%{DIRNAME}
+Summary: SmartMet satellite engine
+Name: %{SPECNAME}
+Version: 26.8.26
+Release: 1%{?dist}.fmi
+License: MIT
+Group: SmartMet/Engines
+URL: https://github.com/fmidev/smartmet-engine-satellite
+Source0: %{name}.tar.gz
+BuildRoot: %{_tmppath}/%{name}-%{version}-%{release}-root-%(%{__id_u} -n)
+
+# https://fedoraproject.org/wiki/Changes/Broken_RPATH_will_fail_rpmbuild
+%global __brp_check_rpaths %{nil}
+
+%if 0%{?rhel} && 0%{rhel} < 9
+%define smartmet_boost boost169
+%else
+%define smartmet_boost boost
+%endif
+
+%if 0%{?rhel} && 0%{rhel} < 10
+%define smartmet_fmt fmt11-devel
+%define smartmet_fmt_lib fmt11
+%else
+%define smartmet_fmt fmt-devel
+%define smartmet_fmt_lib fmt
+%endif
+
+BuildRequires: rpm-build
+BuildRequires: gcc-c++
+BuildRequires: make
+BuildRequires: %{smartmet_boost}-devel
+BuildRequires: smartmet-library-spine-devel >= 26.8.24
+BuildRequires: smartmet-library-macgyver-devel >= 26.8.24
+BuildRequires: smartmet-utils-devel >= 26.8.24
+BuildRequires: libconfig17-devel
+BuildRequires: %{smartmet_fmt}
+BuildRequires: gdal312-devel
+Requires: %{smartmet_boost}-thread
+Requires: %{smartmet_boost}-regex
+Requires: smartmet-library-spine >= 26.8.24
+Requires: smartmet-library-macgyver >= 26.8.24
+Requires: libconfig17
+Requires: %{smartmet_fmt_lib}
+Requires: gdal312-libs
+Provides: %{SPECNAME}
+
+%description
+FMI SmartMet satellite engine serving precoloured satellite imagery
+stored as cloud optimized GeoTIFF files.
+
+%package -n %{SPECNAME}-devel
+Summary: SmartMet %{SPECNAME} development headers
+Group: SmartMet/Development
+Provides: %{SPECNAME}-devel
+Requires: %{SPECNAME} = %{version}-%{release}
+Requires: smartmet-library-spine-devel >= 26.8.24
+Requires: smartmet-library-macgyver-devel >= 26.8.24
+%description -n %{SPECNAME}-devel
+SmartMet %{SPECNAME} development headers.
+
+%prep
+rm -rf $RPM_BUILD_ROOT
+
+%setup -q -n %{SPECNAME}
+
+%build -q -n %{SPECNAME}
+make %{_smp_mflags}
+
+%install
+%makeinstall
+
+%clean
+rm -rf $RPM_BUILD_ROOT
+
+%files -n %{SPECNAME}
+%defattr(0775,root,root,0775)
+%{_datadir}/smartmet/engines/%{DIRNAME}.so
+
+%files -n %{SPECNAME}-devel
+%defattr(0664,root,root,0775)
+%{_includedir}/smartmet/engines/%{DIRNAME}/*.h
+
+%changelog
+* Tue Aug 26 2026 Mika Heiskanen <mika.heiskanen@fmi.fi> 26.8.26-1.fmi
+- Initial release: satellite imagery engine for the WMS plugin

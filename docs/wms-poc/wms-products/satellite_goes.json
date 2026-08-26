@@ -1,0 +1,31 @@
+{
+  "title": "GOES-East true colours",
+  "abstract": "ABI true colour composite in the Eckert IV projection",
+  "producer": "goes_east_truecolor",
+  "projection": {},
+  "views": [
+    {
+      "layers": [
+        {
+          "qid"        : "sat",
+          "layer_type" : "satellite"
+        },
+        {
+          "qid"        : "borders",
+          "layer_type" : "map",
+          "map":
+          {
+            "schema" : "natural_earth",
+            "table"  : "admin_0_countries"
+          },
+          "attributes":
+          {
+            "fill"         : "none",
+            "stroke"       : "#222",
+            "stroke-width" : "0.3"
+          }
+        }
+      ]
+    }
+  ]
+}
