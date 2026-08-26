@@ -4,7 +4,7 @@
 Summary: SmartMet satellite engine
 Name: %{SPECNAME}
 Version: 26.8.26
-Release: 1%{?dist}.fmi
+Release: 2%{?dist}.fmi
 License: MIT
 Group: SmartMet/Engines
 URL: https://github.com/fmidev/smartmet-engine-satellite
@@ -84,5 +84,7 @@ rm -rf $RPM_BUILD_ROOT
 %{_includedir}/smartmet/engines/%{DIRNAME}/*.h
 
 %changelog
-* Tue Aug 26 2026 Mika Heiskanen <mika.heiskanen@fmi.fi> 26.8.26-1.fmi
+* Wed Aug 26 2026 Mika Heiskanen <mika.heiskanen@fmi.fi> 26.8.26-2.fmi
+- Products are now identified by a producer and a parameter
+* Wed Aug 26 2026 Mika Heiskanen <mika.heiskanen@fmi.fi> 26.8.26-1.fmi
 - Initial release: satellite imagery engine for the WMS plugin
