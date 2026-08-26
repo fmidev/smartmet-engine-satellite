@@ -8,7 +8,9 @@
 #include <fmt/format.h>
 #include <iostream>
 #include <chrono>
+#include <cmath>
 #include <fstream>
+#include <limits>
 #include <filesystem>
 #include <functional>
 #include <set>
@@ -517,26 +519,134 @@ void warp_uses_overviews()
 
 // ----------------------------------------------------------------------
 
-void warp_uncoloured_data_fails()
+void warp_values()
 {
   auto info = find_image(float_product, {}, Fmi::TimeDuration(0, 0, 0));
   if (!info)
     TEST_FAILED("No image available for '" + name_of(float_product) + "'");
 
+  if (info->model != BandModel::Float)
+    TEST_FAILED("The product is not uncoloured data");
+
+  // The NWC SAF products mark missing values with NaN
+  if (!info->nodata || !std::isnan(*info->nodata))
+    TEST_FAILED(fmt::format("Expected a NaN no data value, got set={} value={}",
+                            info->nodata.has_value(),
+                            info->nodata ? *info->nodata : 0.0));
+
+  // The native area of the product
+  WarpOptions options;
+  options.crs = "EPSG:3035";
+  options.bbox = {2244000, 800000, 6300000, 5820000};
+  options.width = 300;
+  options.height = 400;
+
+  auto image = satellite->warpValues(*info, options);
+
+  if (image.width != 300 || image.height != 400)
+    TEST_FAILED("The warped image has the wrong size");
+  if (image.values.size() != 120000)
+    TEST_FAILED("The warped image has the wrong number of values");
+
+  std::size_t valid = 0;
+  float smallest = std::numeric_limits<float>::max();
+  float largest = -std::numeric_limits<float>::max();
+
+  for (const auto& value : image.values)
+  {
+    if (std::isnan(value))
+      continue;
+    valid++;
+    smallest = std::min(smallest, value);
+    largest = std::max(largest, value);
+  }
+
+  if (valid == 0)
+    TEST_FAILED("All the values are missing");
+
+  // Cloud top temperatures in Kelvin. The file itself reports a range of
+  // 196...330 K, and nearest neighbour resampling cannot leave that.
+  if (smallest < 150 || largest > 350)
+    TEST_FAILED(fmt::format("The value range {}...{} is not a cloud top temperature in Kelvin",
+                            smallest,
+                            largest));
+
+  // Cloud top temperature exists only where there are clouds, so a good
+  // part of the area must be missing
+  if (valid == image.values.size())
+    TEST_FAILED("Every pixel has a value, so the missing ones were not marked");
+
+  TEST_PASSED();
+}
+
+// ----------------------------------------------------------------------
+/*!
+ * \brief Areas outside the image must be missing, not zero
+ *
+ * Zero is a valid temperature and a valid concentration, so filling the
+ * uncovered area with zeroes would draw a cold or clean region which is
+ * not there.
+ */
+// ----------------------------------------------------------------------
+
+void warp_values_outside_data()
+{
+  auto info = find_image(float_product, {}, Fmi::TimeDuration(0, 0, 0));
+  if (!info)
+    TEST_FAILED("No image available for '" + name_of(float_product) + "'");
+
+  // The Pacific: the European product has nothing there
+  WarpOptions options;
+  options.crs = "EPSG:3857";
+  options.bbox = {-17000000, -1000000, -16000000, 0};
+  options.width = 64;
+  options.height = 64;
+
+  auto image = satellite->warpValues(*info, options);
+
+  for (const auto& value : image.values)
+    if (!std::isnan(value))
+      TEST_FAILED(fmt::format("Expected only missing values, got {}", value));
+
+  TEST_PASSED();
+}
+
+// ----------------------------------------------------------------------
+
+void warp_wrong_kind_fails()
+{
   WarpOptions options;
   options.crs = "EPSG:3035";
   options.bbox = {2244000, 800000, 6300000, 5820000};
   options.width = 100;
   options.height = 100;
 
+  // Asking for the pixels of uncoloured data
+  auto uncoloured = find_image(float_product, {}, Fmi::TimeDuration(0, 0, 0));
+  if (!uncoloured)
+    TEST_FAILED("No image available for '" + name_of(float_product) + "'");
+
   try
   {
-    satellite->warp(*info, options);
-    TEST_FAILED("Warping uncoloured data should have failed");
+    satellite->warp(*uncoloured, options);
+    TEST_FAILED("Asking for the pixels of uncoloured data should have failed");
   }
   catch (const std::exception&)
   {
-    // Expected: the error message tells the user the data is not supported
+  }
+
+  // And asking for the values of a precoloured image
+  auto coloured = find_image(rgba_product, {}, Fmi::TimeDuration(0, 0, 0));
+  if (!coloured)
+    TEST_FAILED("No image available for '" + name_of(rgba_product) + "'");
+
+  try
+  {
+    satellite->warpValues(*coloured, options);
+    TEST_FAILED("Asking for the values of a precoloured image should have failed");
+  }
+  catch (const std::exception&)
+  {
   }
 
   TEST_PASSED();
@@ -1026,7 +1136,9 @@ class tests : public tframe::tests
     TEST(warp_gray_alpha);
     TEST(warp_geostationary);
     TEST(warp_uses_overviews);
-    TEST(warp_uncoloured_data_fails);
+    TEST(warp_values);
+    TEST(warp_values_outside_data);
+    TEST(warp_wrong_kind_fails);
     TEST(live_scan);
     TEST(staggered_updates);
     TEST(modified_in_place);

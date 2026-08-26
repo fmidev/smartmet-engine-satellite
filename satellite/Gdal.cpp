@@ -17,6 +17,7 @@
 #include <gdal_alg.h>
 #include <gdalwarper.h>
 #include <memory>
+#include <limits>
 #include <mutex>
 #include <ogr_spatialref.h>
 
@@ -105,10 +106,15 @@ void deduce_band_model(GDALDatasetH ds, ImageInfo& info)
 
   if (type != GDT_Byte)
   {
-    // Uncoloured data. Recognized so that a clear error message can be
-    // given, but not supported yet.
+    // Uncoloured data: the values need a colour map
     info.model = BandModel::Float;
     info.alphaband = 0;
+
+    int has_nodata = FALSE;
+    const double nodata = GDALGetRasterNoDataValue(band1, &has_nodata);
+    if (has_nodata != FALSE)
+      info.nodata = nodata;
+
     return;
   }
 
@@ -353,6 +359,165 @@ int select_overview(GDALDatasetH src, void* transformer, const WarpOptions& opti
   return best;
 }
 
+
+// ----------------------------------------------------------------------
+/*!
+ * \brief The target projection as WKT
+ */
+// ----------------------------------------------------------------------
+
+std::string target_wkt(const std::string& theCrs)
+{
+  std::string wkt;
+  {
+    std::lock_guard<std::mutex> lock(proj_mutex());
+    OGRSpatialReference srs;
+    if (srs.SetFromUserInput(theCrs.c_str()) != OGRERR_NONE)
+      throw Fmi::Exception(BCP, "Failed to parse the target projection").addParameter("CRS", theCrs);
+    char* tmp = nullptr;
+    srs.exportToWkt(&tmp);
+    if (tmp != nullptr)
+    {
+      wkt = tmp;
+      CPLFree(tmp);
+    }
+  }
+
+  if (wkt.empty())
+    throw Fmi::Exception(BCP, "Failed to export the target projection").addParameter("CRS", theCrs);
+
+  return wkt;
+}
+
+// ----------------------------------------------------------------------
+/*!
+ * \brief Georeference the target image
+ */
+// ----------------------------------------------------------------------
+
+void set_target_georeference(GDALDatasetH dst,
+                             const WarpOptions& theOptions,
+                             const std::string& theWkt)
+{
+  const double dx = (theOptions.bbox[2] - theOptions.bbox[0]) / theOptions.width;
+  const double dy = (theOptions.bbox[3] - theOptions.bbox[1]) / theOptions.height;
+
+  if (dx <= 0 || dy <= 0)
+    throw Fmi::Exception(BCP, "The requested bounding box is empty");
+
+  std::array<double, 6> geotransform{theOptions.bbox[0], dx, 0, theOptions.bbox[3], 0, -dy};
+
+  if (GDALSetGeoTransform(dst, geotransform.data()) != CE_None)
+    throw Fmi::Exception(BCP, "Failed to set the target geotransform");
+
+  if (GDALSetProjection(dst, theWkt.c_str()) != CE_None)
+    throw Fmi::Exception(BCP, "Failed to set the target projection");
+}
+
+// ----------------------------------------------------------------------
+/*!
+ * \brief Open the image at the overview level which suits the request
+ */
+// ----------------------------------------------------------------------
+
+DatasetPtr open_source(const ImageInfo& theImage,
+                       GDALDatasetH dst,
+                       const WarpOptions& theOptions)
+{
+  DatasetPtr src(GDALOpenEx(
+      theImage.path.c_str(), GDAL_OF_RASTER | GDAL_OF_READONLY, nullptr, nullptr, nullptr));
+  if (!src)
+    throw Fmi::Exception(BCP, "Failed to open the image")
+        .addParameter("Reason", CPLGetLastErrorMsg());
+
+  int overview = -1;
+  {
+    TransformerPtr probe;
+    {
+      std::lock_guard<std::mutex> lock(proj_mutex());
+      probe.reset(GDALCreateGenImgProjTransformer2(src.get(), dst, nullptr));
+    }
+    if (probe)
+      overview = select_overview(src.get(), probe.get(), theOptions);
+  }
+
+  if (overview >= 0)
+  {
+    char** openoptions = nullptr;
+    openoptions =
+        CSLSetNameValue(openoptions, "OVERVIEW_LEVEL", fmt::format("{}", overview).c_str());
+    DatasetPtr overview_ds(GDALOpenEx(
+        theImage.path.c_str(), GDAL_OF_RASTER | GDAL_OF_READONLY, nullptr, openoptions, nullptr));
+    CSLDestroy(openoptions);
+
+    // Fall back to the full resolution image if the overview cannot be
+    // opened for some reason
+    if (overview_ds)
+      src = std::move(overview_ds);
+  }
+
+  return src;
+}
+
+// ----------------------------------------------------------------------
+/*!
+ * \brief Run a prepared warp operation
+ *
+ * Takes ownership of the warp options.
+ */
+// ----------------------------------------------------------------------
+
+void execute_warp(GDALWarpOptions* theOptions, int theWidth, int theHeight, const std::string& thePath)
+{
+  {
+    std::lock_guard<std::mutex> lock(proj_mutex());
+    theOptions->pTransformerArg =
+        GDALCreateGenImgProjTransformer2(theOptions->hSrcDS, theOptions->hDstDS, nullptr);
+  }
+
+  if (theOptions->pTransformerArg == nullptr)
+  {
+    GDALDestroyWarpOptions(theOptions);
+    throw Fmi::Exception(BCP, "Failed to create the coordinate transformation")
+        .addParameter("Path", thePath);
+  }
+
+  theOptions->pfnTransformer = GDALGenImgProjTransform;
+
+  // Transforming every pixel exactly means calling PROJ for every pixel,
+  // which dominates the cost of a nearest neighbour warp. Approximating
+  // the transformation to within a fraction of a pixel is what the
+  // gdalwarp utility does by default, and is far cheaper.
+  void* approx = GDALCreateApproxTransformer(
+      theOptions->pfnTransformer, theOptions->pTransformerArg, itsErrorThreshold);
+
+  if (approx != nullptr)
+  {
+    // The approximating transformer now owns the exact one, hence
+    // GDALDestroyTransformer below releases both
+    GDALApproxTransformerOwnsSubtransformer(approx, TRUE);
+    theOptions->pTransformerArg = approx;
+    theOptions->pfnTransformer = GDALApproxTransform;
+  }
+
+  CPLErr err = CE_None;
+  {
+    GDALWarpOperation operation;
+    err = operation.Initialize(theOptions);
+    if (err == CE_None)
+      err = operation.ChunkAndWarpImage(0, 0, theWidth, theHeight);
+  }
+
+  GDALDestroyTransformer(theOptions->pTransformerArg);
+  theOptions->pTransformerArg = nullptr;
+  GDALDestroyWarpOptions(theOptions);
+
+  if (err != CE_None)
+    throw Fmi::Exception(BCP, "Failed to warp the image")
+        .addParameter("Path", thePath)
+        .addParameter("Reason", CPLGetLastErrorMsg());
+}
+
 }  // namespace
 
 // ----------------------------------------------------------------------
@@ -440,7 +605,8 @@ Image warp(const ImageInfo& theImage, const WarpOptions& theOptions)
       throw Fmi::Exception(BCP, "The requested image size must be positive");
 
     if (theImage.model == BandModel::Float)
-      throw Fmi::Exception(BCP, "Uncoloured satellite data is not supported yet")
+      throw Fmi::Exception(BCP,
+                           "Uncoloured satellite data has no colours to warp, ask for the values")
           .addParameter("Path", theImage.path);
 
     Image result;
@@ -448,26 +614,7 @@ Image warp(const ImageInfo& theImage, const WarpOptions& theOptions)
     result.height = theOptions.height;
     result.pixels.resize(static_cast<std::size_t>(theOptions.width) * theOptions.height, 0);
 
-    // Target CRS
-    std::string dst_wkt;
-    {
-      std::lock_guard<std::mutex> lock(proj_mutex());
-      OGRSpatialReference dst_srs;
-      if (dst_srs.SetFromUserInput(theOptions.crs.c_str()) != OGRERR_NONE)
-        throw Fmi::Exception(BCP, "Failed to parse the target projection")
-            .addParameter("CRS", theOptions.crs);
-      char* tmp = nullptr;
-      dst_srs.exportToWkt(&tmp);
-      if (tmp != nullptr)
-      {
-        dst_wkt = tmp;
-        CPLFree(tmp);
-      }
-    }
-
-    if (dst_wkt.empty())
-      throw Fmi::Exception(BCP, "Failed to export the target projection")
-          .addParameter("CRS", theOptions.crs);
+    const auto dst_wkt = target_wkt(theOptions.crs);
 
     // The target of the warp is the ARGB buffer of the result. The bands
     // are mapped so that GDAL writes the bytes directly in the order the
@@ -508,55 +655,10 @@ Image warp(const ImageInfo& theImage, const WarpOptions& theOptions)
 
     GDALSetRasterColorInterpretation(GDALGetRasterBand(dst.get(), 4), GCI_AlphaBand);
 
-    // Geotransform of the target: the bounding box maps to the whole image
-    const double dx = (theOptions.bbox[2] - theOptions.bbox[0]) / theOptions.width;
-    const double dy = (theOptions.bbox[3] - theOptions.bbox[1]) / theOptions.height;
+    set_target_georeference(dst.get(), theOptions, dst_wkt);
 
-    if (dx <= 0 || dy <= 0)
-      throw Fmi::Exception(BCP, "The requested bounding box is empty");
+    auto src = open_source(theImage, dst.get(), theOptions);
 
-    std::array<double, 6> dst_geotransform{theOptions.bbox[0], dx, 0, theOptions.bbox[3], 0, -dy};
-
-    if (GDALSetGeoTransform(dst.get(), dst_geotransform.data()) != CE_None)
-      throw Fmi::Exception(BCP, "Failed to set the target geotransform");
-
-    if (GDALSetProjection(dst.get(), dst_wkt.c_str()) != CE_None)
-      throw Fmi::Exception(BCP, "Failed to set the target projection");
-
-    // Open the source image and choose the overview level to use
-    DatasetPtr src(GDALOpenEx(
-        theImage.path.c_str(), GDAL_OF_RASTER | GDAL_OF_READONLY, nullptr, nullptr, nullptr));
-    if (!src)
-      throw Fmi::Exception(BCP, "Failed to open the image")
-          .addParameter("Reason", CPLGetLastErrorMsg());
-
-    int overview = -1;
-    {
-      TransformerPtr probe;
-      {
-        std::lock_guard<std::mutex> lock(proj_mutex());
-        probe.reset(GDALCreateGenImgProjTransformer2(src.get(), dst.get(), nullptr));
-      }
-      if (probe)
-        overview = select_overview(src.get(), probe.get(), theOptions);
-    }
-
-    if (overview >= 0)
-    {
-      char** openoptions = nullptr;
-      openoptions =
-          CSLSetNameValue(openoptions, "OVERVIEW_LEVEL", fmt::format("{}", overview).c_str());
-      DatasetPtr overview_ds(GDALOpenEx(
-          theImage.path.c_str(), GDAL_OF_RASTER | GDAL_OF_READONLY, nullptr, openoptions, nullptr));
-      CSLDestroy(openoptions);
-
-      // Fall back to the full resolution image if the overview cannot be
-      // opened for some reason
-      if (overview_ds)
-        src = std::move(overview_ds);
-    }
-
-    // Warp
     auto* warpoptions = GDALCreateWarpOptions();
 
     warpoptions->hSrcDS = src.get();
@@ -585,59 +687,118 @@ Image warp(const ImageInfo& theImage, const WarpOptions& theOptions)
     warpoptions->papszWarpOptions =
         CSLSetNameValue(warpoptions->papszWarpOptions, "INIT_DEST", "0");
 
-    {
-      std::lock_guard<std::mutex> lock(proj_mutex());
-      warpoptions->pTransformerArg =
-          GDALCreateGenImgProjTransformer2(src.get(), dst.get(), nullptr);
-    }
-
-    if (warpoptions->pTransformerArg == nullptr)
-    {
-      GDALDestroyWarpOptions(warpoptions);
-      throw Fmi::Exception(BCP, "Failed to create the coordinate transformation")
-          .addParameter("Path", theImage.path);
-    }
-
-    warpoptions->pfnTransformer = GDALGenImgProjTransform;
-
-    // Transforming every pixel exactly means calling PROJ for every pixel,
-    // which dominates the cost of a nearest neighbour warp. Approximating
-    // the transformation to within a fraction of a pixel is what the
-    // gdalwarp utility does by default, and is far cheaper.
-    void* approx = GDALCreateApproxTransformer(
-        warpoptions->pfnTransformer, warpoptions->pTransformerArg, itsErrorThreshold);
-
-    if (approx != nullptr)
-    {
-      // The approximating transformer now owns the exact one, hence
-      // GDALDestroyTransformer below releases both
-      GDALApproxTransformerOwnsSubtransformer(approx, TRUE);
-      warpoptions->pTransformerArg = approx;
-      warpoptions->pfnTransformer = GDALApproxTransform;
-    }
-
-    CPLErr err = CE_None;
-    {
-      GDALWarpOperation operation;
-      err = operation.Initialize(warpoptions);
-      if (err == CE_None)
-        err = operation.ChunkAndWarpImage(0, 0, theOptions.width, theOptions.height);
-    }
-
-    GDALDestroyTransformer(warpoptions->pTransformerArg);
-    warpoptions->pTransformerArg = nullptr;
-    GDALDestroyWarpOptions(warpoptions);
-
-    if (err != CE_None)
-      throw Fmi::Exception(BCP, "Failed to warp the image")
-          .addParameter("Path", theImage.path)
-          .addParameter("Reason", CPLGetLastErrorMsg());
+    execute_warp(warpoptions, theOptions.width, theOptions.height, theImage.path);
 
     return result;
   }
   catch (...)
   {
     throw Fmi::Exception::Trace(BCP, "Failed to warp a satellite image")
+        .addParameter("Path", theImage.path);
+  }
+}
+
+// ----------------------------------------------------------------------
+/*!
+ * \brief Warp the values of an uncoloured image
+ *
+ * The result is a float buffer in which missing values are NaN, whatever
+ * the image itself uses to mark them: the NWC SAF products use NaN and
+ * the COBRA products use -444.
+ */
+// ----------------------------------------------------------------------
+
+ValueImage warpValues(const ImageInfo& theImage, const WarpOptions& theOptions)
+{
+  try
+  {
+    initialize();
+
+    if (theOptions.width <= 0 || theOptions.height <= 0)
+      throw Fmi::Exception(BCP, "The requested image size must be positive");
+
+    if (theImage.model != BandModel::Float)
+      throw Fmi::Exception(BCP,
+                           "The image is precoloured, ask for the pixels instead of the values")
+          .addParameter("Path", theImage.path);
+
+    const auto missing = std::numeric_limits<float>::quiet_NaN();
+
+    ValueImage result;
+    result.width = theOptions.width;
+    result.height = theOptions.height;
+    result.values.assign(static_cast<std::size_t>(theOptions.width) * theOptions.height, missing);
+
+    const auto dst_wkt = target_wkt(theOptions.crs);
+
+    auto* memdriver = GDALGetDriverByName("MEM");
+    if (memdriver == nullptr)
+      throw Fmi::Exception(BCP, "The GDAL MEM driver is not available");
+
+    DatasetPtr dst(
+        GDALCreate(memdriver, "", theOptions.width, theOptions.height, 0, GDT_Float32, nullptr));
+    if (!dst)
+      throw Fmi::Exception(BCP, "Failed to create the target image");
+
+    {
+      char** options = nullptr;
+      options = CSLSetNameValue(
+          options,
+          "DATAPOINTER",
+          fmt::format("{}", reinterpret_cast<std::uintptr_t>(result.values.data())).c_str());
+      const auto err = GDALAddBand(dst.get(), GDT_Float32, options);
+      CSLDestroy(options);
+
+      if (err != CE_None)
+        throw Fmi::Exception(BCP, "Failed to add a band to the target image");
+    }
+
+    set_target_georeference(dst.get(), theOptions, dst_wkt);
+
+    auto src = open_source(theImage, dst.get(), theOptions);
+
+    auto* warpoptions = GDALCreateWarpOptions();
+
+    warpoptions->hSrcDS = src.get();
+    warpoptions->hDstDS = dst.get();
+
+    // Nearest neighbour also for values: interpolating across the edge of
+    // the data, or between the two sides of a cloud edge, would invent
+    // values which were never measured.
+    warpoptions->eResampleAlg = GRA_NearestNeighbour;
+    warpoptions->eWorkingDataType = GDT_Float32;
+
+    warpoptions->nBandCount = 1;
+    warpoptions->panSrcBands = static_cast<int*>(CPLMalloc(sizeof(int)));
+    warpoptions->panDstBands = static_cast<int*>(CPLMalloc(sizeof(int)));
+    warpoptions->panSrcBands[0] = 1;
+    warpoptions->panDstBands[0] = 1;
+
+    // Whatever the image uses to mark missing values becomes NaN
+    warpoptions->padfSrcNoDataReal = static_cast<double*>(CPLMalloc(sizeof(double)));
+    warpoptions->padfSrcNoDataImag = static_cast<double*>(CPLMalloc(sizeof(double)));
+    warpoptions->padfDstNoDataReal = static_cast<double*>(CPLMalloc(sizeof(double)));
+    warpoptions->padfDstNoDataImag = static_cast<double*>(CPLMalloc(sizeof(double)));
+
+    warpoptions->padfSrcNoDataReal[0] =
+        theImage.nodata ? *theImage.nodata : std::numeric_limits<double>::quiet_NaN();
+    warpoptions->padfSrcNoDataImag[0] = 0;
+    warpoptions->padfDstNoDataReal[0] = std::numeric_limits<double>::quiet_NaN();
+    warpoptions->padfDstNoDataImag[0] = 0;
+
+    // Fill the areas the image does not cover with the target no data
+    // value instead of leaving them at zero, which would be a valid
+    // temperature or concentration
+    warpoptions->papszWarpOptions =
+        CSLSetNameValue(warpoptions->papszWarpOptions, "INIT_DEST", "NO_DATA");
+
+    execute_warp(warpoptions, theOptions.width, theOptions.height, theImage.path);
+
+    return result;
+  }
+  catch (...)
+  {
+    throw Fmi::Exception::Trace(BCP, "Failed to warp the values of a satellite image")
         .addParameter("Path", theImage.path);
   }
 }

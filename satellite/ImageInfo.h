@@ -58,6 +58,11 @@ struct ImageInfo
   // Estimated WGS84 bounding box: minx miny maxx maxy. Not set if the
   // image corners could not be transformed to geographic coordinates.
   std::optional<std::array<double, 4>> bbox;
+
+  // Value marking missing data in uncoloured images. The NWC SAF
+  // products use NaN and the COBRA products use -444, hence it must be
+  // taken from the file rather than assumed.
+  std::optional<double> nodata;
 };
 
 using ImageInfoPtr = std::shared_ptr<const ImageInfo>;

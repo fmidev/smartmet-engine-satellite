@@ -86,6 +86,10 @@ class Engine : public SmartMet::Spine::SmartMetEngine
   // pixel buffer; the areas not covered by the image are transparent.
   Image warp(const ImageInfo& theImage, const WarpOptions& theOptions) const;
 
+  // Warp the values of an uncoloured image, for the caller to colour with
+  // a colour map. Missing values are NaN.
+  ValueImage warpValues(const ImageInfo& theImage, const WarpOptions& theOptions) const;
+
  protected:
   void init() override;
   void shutdown() override;

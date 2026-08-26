@@ -137,6 +137,13 @@ Image Engine::warp(const ImageInfo& theImage, const WarpOptions& theOptions) con
 }
 
 // ----------------------------------------------------------------------
+
+ValueImage Engine::warpValues(const ImageInfo& theImage, const WarpOptions& theOptions) const
+{
+  return Gdal::warpValues(theImage, theOptions);
+}
+
+// ----------------------------------------------------------------------
 /*!
  * \brief Cache statistics for the admin plugin
  *

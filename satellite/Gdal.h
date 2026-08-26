@@ -35,6 +35,16 @@ struct Image
   std::vector<unsigned int> pixels;
 };
 
+// Uncoloured data warped to the requested projection. Missing values are
+// NaN regardless of what the image itself uses to mark them.
+
+struct ValueImage
+{
+  int width{0};
+  int height{0};
+  std::vector<float> values;
+};
+
 // Target of a warp operation
 
 struct WarpOptions
@@ -57,6 +67,11 @@ ImageInfo readMetadata(const std::string& thePath, const Fmi::DateTime& theTime)
 // Warp an image to the requested projection using nearest neighbour
 // interpolation. Areas not covered by the image are left transparent.
 Image warp(const ImageInfo& theImage, const WarpOptions& theOptions);
+
+// Warp the values of an uncoloured image. Nearest neighbour again, since
+// interpolating across the edge of the data or across a cloud mask would
+// invent values which are not there.
+ValueImage warpValues(const ImageInfo& theImage, const WarpOptions& theOptions);
 
 }  // namespace Gdal
 }  // namespace Satellite

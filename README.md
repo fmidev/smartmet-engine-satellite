@@ -106,16 +106,35 @@ overridden when the estimate is not wanted.
 | 3 x Byte | red, green, blue | supported, fully opaque |
 | 2 x Byte | gray, alpha | supported, gray is expanded to RGB |
 | 1 x Byte | gray | supported, fully opaque |
-| 1 x Float32 | uncoloured values | recognized, **not supported yet** |
+| 1 x Float32 | uncoloured values | supported, needs a colour map |
 
-Uncoloured data such as the NWC SAF cloud top temperature products needs
-a colour map, which is a separate feature. The engine recognizes such
-files so that a clear error message can be given instead of a crash.
-Some of these products already ship their colour scale beside the images
-as an SLD file with a `ColorMap type="ramp"`, which is the same thing as
-the colour maps the WMS plugin already interpolates. Note that the
-no-data value is NaN in the NWC SAF products but -444 in the COBRA ones,
-so it has to be read from the file.
+Uncoloured data such as the NWC SAF cloud top temperature products holds
+values rather than colours, so the engine hands out the warped values and
+the caller colours them. `warpValues()` returns a float buffer in which
+missing values are NaN, whatever the image itself uses to mark them: the
+NWC SAF products use NaN and the COBRA products use -444, so the value is
+read from the file. Areas the image does not cover are NaN as well, since
+zero is a perfectly good temperature and would draw a cold region which
+is not there.
+
+Resampling is nearest neighbour for values too. Interpolating across the
+edge of the data, or between the two sides of a cloud edge, would invent
+values which were never measured.
+
+In the WMS plugin the satellite layer colours these with the same colour
+maps the raster layer uses:
+
+```json
+{ "layer_type": "satellite", "producer": "meteosat",
+  "parameter": "ctth_tempe", "colormap": "cloud_top_temperature" }
+```
+
+A colour map on a precoloured product, or a missing colour map on an
+uncoloured one, is reported when the layer is created rather than
+silently ignored. Some products also ship their colour scale beside the
+images as an SLD file with a `ColorMap type="ramp"`, which is the same
+thing as a colour map file with smooth colours, so converting one is a
+matter of transcribing the entries.
 
 Any projection GDAL understands works, including the native geostationary
 projection of the satellites and the Eckert IV projection, which has no
