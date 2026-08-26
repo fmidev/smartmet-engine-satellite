@@ -102,6 +102,15 @@ writes each file once and never modifies it. Never hash pixels: the WMS
 plugin asks for this hash on every request, including the conditional
 ones that must not render anything.
 
+**A broken image is indistinguishable from an empty one.** The production
+system leaves files whose tile directory is all zeros: they open, they
+read, and every pixel comes back as zero, so the layer serves a
+transparent tile and the ETag is perfectly stable, which means the blank
+gets cached. See `~/hub/satellite/WASTED_SPACE_REPORT.md`. Detecting this
+would mean looking at the TIFF tile offsets at scan time; nothing does
+that yet, so a bad production cycle shows up as missing imagery rather
+than as an error.
+
 ## Not implemented yet
 
 - Colour maps for uncoloured data are applied by the WMS layer, not here:
