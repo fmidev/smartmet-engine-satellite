@@ -100,7 +100,25 @@ ones that must not render anything.
 ## Not implemented yet
 
 - Uncoloured Float32 data (NWC SAF products, COBRA) needs a colour map.
-  Such files are recognized and rejected with a clear message.
+  Such files are recognized and rejected with a clear message. The sample
+  data shows what this needs:
+
+  - The COBRA products ship the colour scale next to the images as an SLD
+    file (`weather/test/grimsvotn/cobra_so2_float/COBRA_SO2_index.sld`),
+    a `RasterSymbolizer` with a `ColorMap type="ramp"` of five
+    quantity-and-colour entries. That is the same thing as the plugin's
+    own colour map: `Dali::ColorMap` is a `map<float, unsigned int>` read
+    from a `value;ARGB` file, with `getSmoothColor` interpolating between
+    entries exactly as a ramp does. Converting an SLD ramp into that
+    format is a handful of lines, so the natural division of work is for
+    the engine to hand out float values and let the layer colour them
+    with the existing machinery, the way the raster layer already does
+    for grid data.
+
+  - The no-data value differs by product family: NaN in the NWC SAF
+    products, -444 in the COBRA products. Whatever reads the values must
+    take it from GDAL per file rather than assume NaN. `ImageInfo` does
+    not carry it yet.
 - Level 4 NetCDF products: the IASI files are a CF grid with 138 levels,
   the AVHRR swath files carry a latitude and longitude for every pixel
   and would need resampling.

@@ -111,6 +111,11 @@ overridden when the estimate is not wanted.
 Uncoloured data such as the NWC SAF cloud top temperature products needs
 a colour map, which is a separate feature. The engine recognizes such
 files so that a clear error message can be given instead of a crash.
+Some of these products already ship their colour scale beside the images
+as an SLD file with a `ColorMap type="ramp"`, which is the same thing as
+the colour maps the WMS plugin already interpolates. Note that the
+no-data value is NaN in the NWC SAF products but -444 in the COBRA ones,
+so it has to be read from the file.
 
 Any projection GDAL understands works, including the native geostationary
 projection of the satellites and the Eckert IV projection, which has no
