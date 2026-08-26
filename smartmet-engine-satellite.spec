@@ -4,7 +4,7 @@
 Summary: SmartMet satellite engine
 Name: %{SPECNAME}
 Version: 26.8.26
-Release: 3%{?dist}.fmi
+Release: 4%{?dist}.fmi
 License: MIT
 Group: SmartMet/Engines
 URL: https://github.com/fmidev/smartmet-engine-satellite
@@ -38,6 +38,8 @@ BuildRequires: smartmet-utils-devel >= 26.8.24
 BuildRequires: libconfig17-devel
 BuildRequires: %{smartmet_fmt}
 BuildRequires: gdal312-devel
+#TestRequires: smartmet-test-data >= 26.8.26
+#TestRequires: smartmet-library-regression
 Requires: %{smartmet_boost}-thread
 Requires: %{smartmet_boost}-regex
 Requires: smartmet-library-spine >= 26.8.24
@@ -84,6 +86,9 @@ rm -rf $RPM_BUILD_ROOT
 %{_includedir}/smartmet/engines/%{DIRNAME}/*.h
 
 %changelog
+* Wed Aug 26 2026 Mika Heiskanen <mika.heiskanen@fmi.fi> 26.8.26-4.fmi
+- Tests use the images of the smartmet-test-data package
+- Silenced the PROJ reports about points which are not on the Earth
 * Wed Aug 26 2026 Mika Heiskanen <mika.heiskanen@fmi.fi> 26.8.26-3.fmi
 - Added warpValues for products which hold values instead of colours
 * Wed Aug 26 2026 Mika Heiskanen <mika.heiskanen@fmi.fi> 26.8.26-2.fmi

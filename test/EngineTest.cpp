@@ -30,7 +30,7 @@ using namespace SmartMet::Engine::Satellite;
 // Products are addressed by a producer and a parameter
 const ProductKey rgba_product = {"meteosat", "natural"};
 const ProductKey grayalpha_product = {"metop", "ir108"};
-const ProductKey cog_product = {"goes-east", "truecolor"};
+const ProductKey cog_product = {"meteosat_eckert", "wv73"};
 const ProductKey geos_product = {"meteosat", "ir108"};
 const ProductKey float_product = {"meteosat", "ctth_tempe"};
 const ProductKey series_product = {"meteosat", "fog_rgb"};
@@ -39,7 +39,7 @@ const ProductKey livescan_other_product = {"testsat", "livescan_other"};
 
 // These two share a directory and one name is a prefix of the other
 const ProductKey shared_dir_a = {"metop", "ir108"};
-const ProductKey shared_dir_b = {"metop", "ir108_ilmavoimat"};
+const ProductKey shared_dir_b = {"metop", "vis06"};
 
 std::string name_of(const ProductKey& key)
 {
@@ -65,7 +65,7 @@ void producers()
 {
   auto names = satellite->producers();
 
-  const std::vector<std::string> expected = {"goes-east", "meteosat", "metop", "testsat"};
+  const std::vector<std::string> expected = {"meteosat", "meteosat_eckert", "metop", "testsat"};
   if (names != expected)
     TEST_FAILED("Expected the producers " + boost::algorithm::join(expected, ",") + ", got " +
                 boost::algorithm::join(names, ","));
@@ -95,15 +95,15 @@ void menu_parameters()
                 boost::algorithm::join(params, ","));
 
   auto metop = satellite->parameters("metop");
-  const std::vector<std::string> metop_expected = {"ir108", "ir108_ilmavoimat"};
+  const std::vector<std::string> metop_expected = {"ir108", "vis06"};
   if (metop != metop_expected)
     TEST_FAILED("Expected the metop parameters " + boost::algorithm::join(metop_expected, ",") +
                 ", got " + boost::algorithm::join(metop, ","));
 
   // Another satellite must not see them
-  auto others = satellite->parameters("goes-east");
-  if (others.size() != 1 || others[0] != "truecolor")
-    TEST_FAILED("The parameters of goes-east are wrong");
+  auto others = satellite->parameters("meteosat_eckert");
+  if (others.size() != 1 || others[0] != "wv73")
+    TEST_FAILED("The parameters of meteosat_eckert are wrong");
 
   if (!satellite->parameters("no_such_producer").empty())
     TEST_FAILED("Found parameters for an unknown producer");
@@ -166,7 +166,7 @@ void parse_time()
   } tests[] = {
       {"20260826_1415_Meteosat-10_EPSG3035_natural_with_colorized_ir_clouds.tif",
        "20260826T141500"},
-      {"20260820_0840_GOES-19_geos_truecolor_with_ash.tif", "20260820T084000"},
+      {"20260826_1415_Meteosat-10_geos_wv73.tif", "20260826T141500"},
       {"not_a_satellite_file.tif", ""},
       {"2026082_1415_broken.tif", ""},
       {"20260826x1415_broken.tif", ""},
@@ -506,9 +506,9 @@ void warp_uses_overviews()
   if (opaque_pixels(image) == 0)
     TEST_FAILED("The overview tile is fully transparent");
 
-  // Reading the 7633x8313 image at full resolution takes seconds. Using
-  // the overviews it takes tens of milliseconds.
-  if (ms > 500)
+  // Reading the 5108x5542 image at full resolution costs some 400 ms.
+  // Using the overviews it takes about ten.
+  if (ms > 100)
     TEST_FAILED(fmt::format(
         "Warping a whole Earth tile took {} ms, the overviews are probably not used", ms));
 
@@ -847,8 +847,9 @@ void live_scan()
  * One directory holds all the composites of one instrument, so the file
  * name pattern is what separates the products. The names are not always
  * distinct enough to be careless about: this directory holds ir108,
- * ir108_ilmavoimat, vis06_with_ir108 and vis08_with_ir108, and the first
- * name is a prefix of the second.
+ * vis06_with_ir108 and vis08_with_ir108, so all three file names end in
+ * ir108.tif and a pattern which is not anchored at the end would pick up
+ * all three.
  */
 // ----------------------------------------------------------------------
 
@@ -885,12 +886,10 @@ void shared_directory()
       TEST_FAILED("'" + name_of(shared_dir_a) + "' accepted '" + path + "'");
 
   for (const auto& path : b_paths)
-    if (!ends_with(path, "_EPSG3035_ir108_ilmavoimat.tif"))
+    if (!ends_with(path, "_EPSG3035_vis06_with_ir108.tif"))
       TEST_FAILED("'" + name_of(shared_dir_b) + "' accepted '" + path + "'");
 
-  // The directory holds more of both composites than of the plain one,
-  // which is another way of seeing that the two are really separate
-  if (a_paths.size() == b_paths.size() && a_paths == b_paths)
+  if (a_paths == b_paths)
     TEST_FAILED("The two products of the same directory have identical contents");
 
   TEST_PASSED();

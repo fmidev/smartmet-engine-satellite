@@ -11,13 +11,14 @@
 #include <algorithm>
 #include <cmath>
 #include <cpl_conv.h>
+#include <cpl_error.h>
 #include <cpl_string.h>
 #include <filesystem>
 #include <gdal.h>
 #include <gdal_alg.h>
 #include <gdalwarper.h>
-#include <memory>
 #include <limits>
+#include <memory>
 #include <mutex>
 #include <ogr_spatialref.h>
 
@@ -63,6 +64,25 @@ std::mutex& proj_mutex()
   static std::mutex mutex;
   return mutex;
 }
+
+// Several operations here ask GDAL for things which are expected to
+// fail for some of the input: a full disc image has corners which are
+// not on the Earth, and a bounding box is estimated by transforming a
+// grid of points and ignoring the ones which cannot be transformed.
+// PROJ reports every such point, which would be a stream of log lines
+// per request, so its reports are silenced while those operations run.
+// Real failures are noticed from the return values.
+
+struct QuietErrors
+{
+  QuietErrors() { CPLPushErrorHandler(CPLQuietErrorHandler); }
+  ~QuietErrors() { CPLPopErrorHandler(); }
+
+  QuietErrors(const QuietErrors&) = delete;
+  QuietErrors& operator=(const QuietErrors&) = delete;
+  QuietErrors(QuietErrors&&) = delete;
+  QuietErrors& operator=(QuietErrors&&) = delete;
+};
 
 // Automatic closing of GDAL resources
 
@@ -212,7 +232,11 @@ std::optional<std::array<double, 4>> estimate_bbox(const ImageInfo& info)
   }
 
   std::vector<int> ok(xs.size(), FALSE);
-  transformation->Transform(static_cast<int>(xs.size()), xs.data(), ys.data(), nullptr, ok.data());
+  {
+    QuietErrors quiet;
+    transformation->Transform(
+        static_cast<int>(xs.size()), xs.data(), ys.data(), nullptr, ok.data());
+  }
 
   double minx = 180;
   double miny = 90;
@@ -279,8 +303,11 @@ int select_overview(GDALDatasetH src, void* transformer, const WarpOptions& opti
     }
 
   std::vector<int> ok(xs.size(), FALSE);
-  GDALGenImgProjTransform(
-      transformer, TRUE, static_cast<int>(xs.size()), xs.data(), ys.data(), zs.data(), ok.data());
+  {
+    QuietErrors quiet;
+    GDALGenImgProjTransform(
+        transformer, TRUE, static_cast<int>(xs.size()), xs.data(), ys.data(), zs.data(), ok.data());
+  }
 
   const auto index = [steps](int i, int j) { return j * (steps + 1) + i; };
 
@@ -359,7 +386,6 @@ int select_overview(GDALDatasetH src, void* transformer, const WarpOptions& opti
   return best;
 }
 
-
 // ----------------------------------------------------------------------
 /*!
  * \brief The target projection as WKT
@@ -373,7 +399,8 @@ std::string target_wkt(const std::string& theCrs)
     std::lock_guard<std::mutex> lock(proj_mutex());
     OGRSpatialReference srs;
     if (srs.SetFromUserInput(theCrs.c_str()) != OGRERR_NONE)
-      throw Fmi::Exception(BCP, "Failed to parse the target projection").addParameter("CRS", theCrs);
+      throw Fmi::Exception(BCP, "Failed to parse the target projection")
+          .addParameter("CRS", theCrs);
     char* tmp = nullptr;
     srs.exportToWkt(&tmp);
     if (tmp != nullptr)
@@ -420,9 +447,7 @@ void set_target_georeference(GDALDatasetH dst,
  */
 // ----------------------------------------------------------------------
 
-DatasetPtr open_source(const ImageInfo& theImage,
-                       GDALDatasetH dst,
-                       const WarpOptions& theOptions)
+DatasetPtr open_source(const ImageInfo& theImage, GDALDatasetH dst, const WarpOptions& theOptions)
 {
   DatasetPtr src(GDALOpenEx(
       theImage.path.c_str(), GDAL_OF_RASTER | GDAL_OF_READONLY, nullptr, nullptr, nullptr));
@@ -467,7 +492,10 @@ DatasetPtr open_source(const ImageInfo& theImage,
  */
 // ----------------------------------------------------------------------
 
-void execute_warp(GDALWarpOptions* theOptions, int theWidth, int theHeight, const std::string& thePath)
+void execute_warp(GDALWarpOptions* theOptions,
+                  int theWidth,
+                  int theHeight,
+                  const std::string& thePath)
 {
   {
     std::lock_guard<std::mutex> lock(proj_mutex());
@@ -502,6 +530,8 @@ void execute_warp(GDALWarpOptions* theOptions, int theWidth, int theHeight, cons
 
   CPLErr err = CE_None;
   {
+    QuietErrors quiet;
+
     GDALWarpOperation operation;
     err = operation.Initialize(theOptions);
     if (err == CE_None)

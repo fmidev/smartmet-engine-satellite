@@ -26,20 +26,21 @@ make format             # clang-format
 make rpm                # Build the RPM
 ```
 
-The tests need sample data which is not packaged yet:
-
-```bash
-make test SATELLITE_TEST_DATA=$HOME/hub/satellite/weather
-```
+The images come from `smartmet-test-data`
+(`/usr/share/smartmet/test/data/satellite`), so `make test` needs no
+arguments. `SATELLITE_TEST_DATA` overrides the location.
 
 `test/EngineTest.cpp` drives the engine through a real `Spine::Reactor`
 using `test/cnf/reactor.conf`, which loads the locally built
 `../../satellite.so`. The products in `test/cnf/satellite.conf` are chosen so that every data
 flavour is covered once: RGBA in a projected CRS, gray plus alpha, a
-large cloud optimized GeoTIFF in Eckert IV, the native geostationary
-projection, uncoloured Float32 data, and one product with several
-timesteps. Several of them share the producer `meteosat`, which is what
-the menu tests need, and `ir108` exists for two producers.
+cloud optimized GeoTIFF in Eckert IV, the native geostationary
+projection without overviews, uncoloured Float32 data, and one product
+with several timesteps. Several share the producer `meteosat`, which is
+what the menu tests need, and `ir108` exists for two producers.
+
+Do not put products whose colouring is made for a particular customer
+into the tests or the test data package: those are proprietary.
 
 ## Source layout
 

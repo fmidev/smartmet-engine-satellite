@@ -21,9 +21,11 @@ LIBS += \
 	-lboost_system \
 	-lpthread
 
-# Location of the sample data. Override on the command line or in the
-# environment once the data is packaged for the test machines.
-SATELLITE_TEST_DATA ?= $(HOME)/hub/satellite/weather
+# The images come from the smartmet-test-data package. Override to test
+# against other data, for example a copy of the production tree.
+SATELLITE_TEST_DATA ?= $(shell test -d /usr/share/smartmet/test/data/satellite \
+	&& echo /usr/share/smartmet/test/data/satellite \
+	|| echo $(HOME)/hub/smartmet-test-data/satellite)
 
 # Directory the live scan test fills at run time
 SATELLITE_SCAN_DIR ?= $(shell pwd)/tmp-scan

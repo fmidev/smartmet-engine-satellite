@@ -197,10 +197,11 @@ sudo make install          # /usr/share/smartmet/engines/satellite.so + headers
 make test
 ```
 
-The tests need sample data, which is not packaged yet. Point
-`SATELLITE_TEST_DATA` at a copy of the `/smartmet/satellite/weather`
-directory tree:
+The images come from the `smartmet-test-data` package, in
+`/usr/share/smartmet/test/data/satellite`. Point `SATELLITE_TEST_DATA`
+elsewhere to test against other data, for example a copy of the
+production tree:
 
 ```bash
-make test SATELLITE_TEST_DATA=$HOME/hub/satellite/weather
+make test SATELLITE_TEST_DATA=/smartmet/satellite/weather
 ```

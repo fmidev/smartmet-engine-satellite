@@ -1,8 +1,8 @@
 {
-  "title": "GOES-East true colours",
-  "abstract": "ABI true colour composite in the Eckert IV projection",
-  "producer": "goes-east",
-  "parameter": "truecolor",
+  "title": "Meteosat water vapour 7.3 um in Eckert IV",
+  "abstract": "SEVIRI water vapour imagery in the Eckert IV projection",
+  "producer": "meteosat_eckert",
+  "parameter": "wv73",
   "projection": {},
   "views": [
     {

@@ -20,6 +20,7 @@ cp $SAT/cnf/*.conf              $WMS/test/cnf/
 cp $SAT/wms-products/*.json     $WMS/test/wms/customers/test/products/
 cp $SAT/dali-products/*.json    $WMS/test/dali/customers/test/products/
 cp $SAT/input/*.get             $WMS/test/input/
+cp $SAT/cloud_top_temperature.csv $WMS/test/wms/resources/colormaps/
 ```
 
 Then declare the engine in `$WMS/test/cnf/reactor.conf`:
@@ -31,13 +32,18 @@ Then declare the engine in `$WMS/test/cnf/reactor.conf`:
 	}
 ```
 
-and tell the test Makefile where the sample data is, by adding this near
-the top of `$WMS/test/Makefile`:
+and tell the test Makefile where the images are, by adding this near the
+top of `$WMS/test/Makefile`:
 
 ```make
-SATELLITE_TEST_DATA ?= $(HOME)/hub/satellite/weather
+SATELLITE_TEST_DATA ?= $(shell test -d /usr/share/smartmet/test/data/satellite \
+	&& echo /usr/share/smartmet/test/data/satellite \
+	|| echo $(HOME)/hub/smartmet-test-data/satellite)
 export SATELLITE_TEST_DATA
 ```
+
+The images come from the `smartmet-test-data` package, so nothing needs
+to be copied by hand once that is installed.
 
 ## Running
 
@@ -64,7 +70,8 @@ reason these files are not committed to the plugin.
 | --- | --- |
 | `satellite_meteosat` | `meteosat/natural`: RGBA in EPSG:3035, the primary case, with a border overlay to show compositing |
 | `satellite_geos` | `meteosat/ir108`: native geostationary projection, gray plus alpha, full disc |
-| `satellite_goes` | `goes-east/truecolor`: large cloud optimized GeoTIFF in Eckert IV, which has no EPSG code |
+| `satellite_eckert` | `meteosat_eckert/wv73`: cloud optimized GeoTIFF in Eckert IV, which has no EPSG code |
+| `satellite_ctth` | `meteosat/ctth_tempe`: uncoloured Float32 values coloured with `cloud_top_temperature.csv` |
 | `satellite_fog` | `meteosat/fog_rgb`: several timesteps, which exercises the WMS time dimension |
 | `satellite.json` (Dali) | a fixed EPSG:3067 projection, for rendering without a WMS request |
 
