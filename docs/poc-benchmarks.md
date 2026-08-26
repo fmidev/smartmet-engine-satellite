@@ -153,3 +153,56 @@ curl -o tile.png 'http://localhost:8099/wms?service=WMS&version=1.3.0\
 &bbox=2504688,8140237,3130860,8766409&width=256&height=256\
 &format=image/png&transparent=true'
 ```
+
+## Should the engine cache decompressed images?
+
+The request pattern of the client decides this, and the OpenGeoWeb
+repository has both the code and its own measurements of it.
+
+**GeoServer is reached with single-image WMS GetMap, arbitrary bounding
+boxes.** The viewport is requested at 1.2 times its size on each axis
+with no snapping, so every pan and zoom produces a bounding box which has
+never been requested before. An observed request is 3105x1901 pixels, and
+one four-step zoom gesture produced 43 of them. The same view served as
+WMTS tiles produced three tile requests.
+
+**The client prefetches whole time series on that path.** Up to 200
+timesteps per layer per round, four at a time, with no cancellation of
+the requests a pan or zoom abandoned. Across the FMI presets the median
+view opens 50 such requests and the worst one 3000. A forecaster
+workspace has a median of 20 enabled raster layers over up to ten
+windows.
+
+**WMTS layers are not prefetched at all.** They request the timestep
+being displayed and rely on the browser tile cache, and the animation
+clock does not wait for them. The satellite layers are still on the
+GeoServer path; 559 preset references await moving.
+
+That asymmetry decides the cache:
+
+- Served as **tiles**, one view needs a handful of small windows of the
+  current image of each product. The measurements above say a 256x256
+  tile needs 2.1 MB of decompressed blocks, so the whole hot set of a
+  busy workspace is hundreds of megabytes. A block cache of one or two
+  gigabytes covers it, and there is nothing for a cache of whole images
+  to add.
+
+- Served as **single images with prefetch**, one layer's round asks for
+  200 different times, each needing most of a different image. At 20 MB
+  of pixels for a 2 km product that is four gigabytes for one layer of
+  one window, and no cache of any realistic size helps: the data simply
+  streams through it. The answer there is to serve tiles, not to buy
+  memory.
+
+So the recommendation is a byte-bounded cache of decompressed **blocks**,
+which is what GDAL's own block cache already is, kept alive by holding
+the datasets open. Two gigabytes is a sensible starting point, and the
+`GDALGetCacheUsed64` counter shows whether it is enough. A cache counted
+in images would have to be bounded in bytes anyway, since one image is
+20 MB for the European products and 563 MB for Himawari in Eckert IV.
+
+One thing costs nothing at all: the images are written once and never
+change, so they can be served with a long `Cache-Control: max-age`. The
+client honours the response `max-age` and stops asking, and the browser
+revalidates with the ETag when it does ask, which the server answers in
+0.9 ms without rendering.
