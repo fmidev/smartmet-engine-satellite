@@ -36,9 +36,7 @@ and tell the test Makefile where the images are, by adding this near the
 top of `$WMS/test/Makefile`:
 
 ```make
-SATELLITE_TEST_DATA ?= $(shell test -d /usr/share/smartmet/test/data/satellite \
-	&& echo /usr/share/smartmet/test/data/satellite \
-	|| echo $(HOME)/hub/smartmet-test-data/satellite)
+SATELLITE_TEST_DATA ?= /usr/share/smartmet/test/data/satellite
 export SATELLITE_TEST_DATA
 ```
 

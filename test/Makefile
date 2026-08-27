@@ -23,9 +23,7 @@ LIBS += \
 
 # The images come from the smartmet-test-data package. Override to test
 # against other data, for example a copy of the production tree.
-SATELLITE_TEST_DATA ?= $(shell test -d /usr/share/smartmet/test/data/satellite \
-	&& echo /usr/share/smartmet/test/data/satellite \
-	|| echo $(HOME)/hub/smartmet-test-data/satellite)
+SATELLITE_TEST_DATA ?= /usr/share/smartmet/test/data/satellite
 
 # Directory the live scan test fills at run time
 SATELLITE_SCAN_DIR ?= $(shell pwd)/tmp-scan
