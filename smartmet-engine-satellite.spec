@@ -31,7 +31,7 @@ BuildRequires: make
 BuildRequires: %{smartmet_boost}-devel
 BuildRequires: smartmet-library-spine-devel >= 26.8.24
 BuildRequires: smartmet-library-macgyver-devel >= 26.8.24
-BuildRequires: smartmet-utils-devel >= 26.8.24
+BuildRequires: smartmet-utils-devel >= 26.7.14
 BuildRequires: libconfig17-devel
 BuildRequires: %{smartmet_fmt_devel}
 BuildRequires: gdal312-devel
