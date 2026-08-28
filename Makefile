@@ -14,7 +14,6 @@ LIBS += $(PREFIX_LDFLAGS) \
 	-lsmartmet-macgyver \
 	-lboost_thread \
 	-lboost_regex \
-	-lboost_system \
 	-lpthread
 
 # What to install

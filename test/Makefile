@@ -18,7 +18,6 @@ LIBS += \
 	-lsmartmet-macgyver \
 	-lboost_thread \
 	-lboost_regex \
-	-lboost_system \
 	-lpthread
 
 # The images come from the smartmet-test-data package. Override to test
