@@ -1,18 +1,18 @@
 #include "Engine.h"
+#include <boost/algorithm/string/join.hpp>
+#include <fmt/format.h>
 #include <macgyver/DateTime.h>
 #include <macgyver/StringConversion.h>
-#include <boost/algorithm/string/join.hpp>
 #include <regression/tframe.h>
 #include <spine/Options.h>
 #include <spine/Reactor.h>
-#include <fmt/format.h>
-#include <iostream>
 #include <chrono>
 #include <cmath>
-#include <fstream>
-#include <limits>
 #include <filesystem>
+#include <fstream>
 #include <functional>
+#include <iostream>
+#include <limits>
 #include <set>
 #include <thread>
 #include <vector>
@@ -57,6 +57,53 @@ ImageInfoPtr find_image(const ProductKey& key,
 std::vector<Fmi::DateTime> times_of(const ProductKey& key)
 {
   return satellite->times(key.first, key.second);
+}
+
+// ----------------------------------------------------------------------
+/*!
+ * \brief An empty configuration file must give empty listings, not errors
+ *
+ * The engine may be enabled in the server before any products are
+ * configured. The startup then warns about the missing products, and
+ * every query gets the empty answer of its return type.
+ */
+// ----------------------------------------------------------------------
+
+// init() and shutdown() are protected because the reactor drives them;
+// this test drives an instance of its own.
+class BareEngine : public Engine
+{
+ public:
+  using Engine::Engine;
+  using Engine::init;
+  using Engine::shutdown;
+};
+
+void minimal_config()
+{
+  BareEngine engine("cnf/empty.conf");
+  engine.init();
+
+  if (!engine.producers().empty())
+    TEST_FAILED("An empty configuration listed producers");
+  if (!engine.parameters("meteosat").empty())
+    TEST_FAILED("An empty configuration listed parameters");
+  if (engine.hasProducer("meteosat"))
+    TEST_FAILED("An empty configuration reported a producer to exist");
+  if (engine.hasProduct("meteosat", "natural"))
+    TEST_FAILED("An empty configuration reported a product to exist");
+  if (!engine.times("meteosat", "natural").empty())
+    TEST_FAILED("An empty configuration listed times");
+  if (!engine.latestTime("meteosat", "natural").is_not_a_date_time())
+    TEST_FAILED("An empty configuration reported a latest time");
+  if (engine.imageCount("meteosat", "natural") != 0)
+    TEST_FAILED("An empty configuration counted images");
+  if (engine.find("meteosat", "natural", {}, Fmi::TimeDuration(0, 0, 0)))
+    TEST_FAILED("An empty configuration found an image");
+
+  engine.shutdown();
+
+  TEST_PASSED();
 }
 
 // ----------------------------------------------------------------------
@@ -112,9 +159,8 @@ void menu_parameters()
   auto testsat = satellite->parameters("testsat");
   const std::vector<std::string> testsat_expected = {"livescan", "livescan_other"};
   if (testsat != testsat_expected)
-    TEST_FAILED("Expected the testsat parameters " +
-                boost::algorithm::join(testsat_expected, ",") + ", got " +
-                boost::algorithm::join(testsat, ","));
+    TEST_FAILED("Expected the testsat parameters " + boost::algorithm::join(testsat_expected, ",") +
+                ", got " + boost::algorithm::join(testsat, ","));
 
   // The same parameter name may belong to several satellites
   if (!satellite->hasProduct("meteosat", "ir108") || !satellite->hasProduct("metop", "ir108"))
@@ -163,14 +209,13 @@ void parse_time()
   {
     std::string filename;
     std::string expected;
-  } tests[] = {
-      {"20260826_1415_Meteosat-10_EPSG3035_natural_with_colorized_ir_clouds.tif",
-       "20260826T141500"},
-      {"20260826_1415_Meteosat-10_geos_wv73.tif", "20260826T141500"},
-      {"not_a_satellite_file.tif", ""},
-      {"2026082_1415_broken.tif", ""},
-      {"20260826x1415_broken.tif", ""},
-      {"", ""}};
+  } tests[] = {{"20260826_1415_Meteosat-10_EPSG3035_natural_with_colorized_ir_clouds.tif",
+                "20260826T141500"},
+               {"20260826_1415_Meteosat-10_geos_wv73.tif", "20260826T141500"},
+               {"not_a_satellite_file.tif", ""},
+               {"2026082_1415_broken.tif", ""},
+               {"20260826x1415_broken.tif", ""},
+               {"", ""}};
 
   for (const auto& test : tests)
   {
@@ -286,9 +331,8 @@ void metadata()
 
   const auto& bbox = *geos->bbox;
   if (bbox[0] < -90 || bbox[2] > 90)
-    TEST_FAILED(fmt::format("The longitude range {}...{} of the 0 degree service is too wide",
-                            bbox[0],
-                            bbox[2]));
+    TEST_FAILED(fmt::format(
+        "The longitude range {}...{} of the 0 degree service is too wide", bbox[0], bbox[2]));
 
   // Uncoloured data must be recognized
 
@@ -470,7 +514,8 @@ void warp_geostationary()
 
   // The 0 degree service covers Europe and Africa, not the whole world
   if (opaque > 3 * image.pixels.size() / 4)
-    TEST_FAILED(fmt::format("{} of {} pixels have data, expected less", opaque, image.pixels.size()));
+    TEST_FAILED(
+        fmt::format("{} of {} pixels have data, expected less", opaque, image.pixels.size()));
 
   TEST_PASSED();
 }
@@ -579,9 +624,8 @@ void warp_values()
   // Cloud top temperatures in Kelvin. The file itself reports a range of
   // 196...330 K, and nearest neighbour resampling cannot leave that.
   if (smallest < 150 || largest > 350)
-    TEST_FAILED(fmt::format("The value range {}...{} is not a cloud top temperature in Kelvin",
-                            smallest,
-                            largest));
+    TEST_FAILED(fmt::format(
+        "The value range {}...{} is not a cloud top temperature in Kelvin", smallest, largest));
 
   // Cloud top temperature exists only where there are clouds, so a good
   // part of the area must be missing
@@ -749,8 +793,14 @@ void warp_speed()
       {"512x512   EPSG:3857 zoom-in ", rgba_product, {2504688, 8140237, 3130860, 8766409}, 512},
       {"1024x1024 EPSG:3857 zoom-in ", rgba_product, {2504688, 8140237, 3130860, 8766409}, 1024},
       {"1024x1024 EPSG:3857 europe  ", rgba_product, {-5000000, 3000000, 6000000, 12000000}, 1024},
-      {"256x256   whole Earth COG   ", cog_product, {-20037508, -20037508, 20037508, 20037508}, 256},
-      {"512x512   geos full disc    ", geos_product, {-20037508, -20037508, 20037508, 20037508}, 512}};
+      {"256x256   whole Earth COG   ",
+       cog_product,
+       {-20037508, -20037508, 20037508, 20037508},
+       256},
+      {"512x512   geos full disc    ",
+       geos_product,
+       {-20037508, -20037508, 20037508, 20037508},
+       512}};
 
   std::cout << "\n";
 
@@ -826,7 +876,9 @@ void live_scan()
     return false;
   };
 
-  if (!wait_for([]() { return satellite->imageCount(livescan_product.first, livescan_product.second) == 1; }))
+  if (!wait_for(
+          []()
+          { return satellite->imageCount(livescan_product.first, livescan_product.second) == 1; }))
   {
     std::filesystem::remove(target);
     TEST_FAILED("The new file was not noticed within 20 seconds");
@@ -846,7 +898,9 @@ void live_scan()
   // And a deleted file must disappear
   std::filesystem::remove(target);
 
-  if (!wait_for([]() { return satellite->imageCount(livescan_product.first, livescan_product.second) == 0; }))
+  if (!wait_for(
+          []()
+          { return satellite->imageCount(livescan_product.first, livescan_product.second) == 0; }))
     TEST_FAILED("The deleted file was not forgotten within 20 seconds");
 
   TEST_PASSED();
@@ -891,7 +945,10 @@ void shared_directory()
 
   // And the files must be the ones the names promise
   const auto ends_with = [](const std::string& str, const std::string& tail)
-  { return str.size() >= tail.size() && str.compare(str.size() - tail.size(), tail.size(), tail) == 0; };
+  {
+    return str.size() >= tail.size() &&
+           str.compare(str.size() - tail.size(), tail.size(), tail) == 0;
+  };
 
   for (const auto& path : a_paths)
     if (!ends_with(path, "_EPSG3035_ir108.tif"))
@@ -1073,8 +1130,7 @@ void modified_in_place()
 
   // Copy the contents of a file over another, keeping the same inode so
   // that the directory itself is not touched
-  const auto overwrite = [](const std::filesystem::path& from,
-                            const std::filesystem::path& to)
+  const auto overwrite = [](const std::filesystem::path& from, const std::filesystem::path& to)
   {
     std::ifstream in(from, std::ios::binary);
     std::ofstream out(to, std::ios::binary | std::ios::trunc);
@@ -1084,8 +1140,9 @@ void modified_in_place()
   std::filesystem::copy_file(
       first_source->path, target, std::filesystem::copy_options::overwrite_existing);
 
-  if (!wait_for([&]() { return satellite->imageCount(livescan_product.first,
-                                                     livescan_product.second) == 1; }))
+  if (!wait_for(
+          [&]()
+          { return satellite->imageCount(livescan_product.first, livescan_product.second) == 1; }))
     fail("The new file was not noticed");
 
   auto before = find_image(livescan_product, {}, Fmi::TimeDuration(0, 0, 0));
@@ -1118,8 +1175,9 @@ void modified_in_place()
 
   cleanup();
 
-  if (!wait_for([&]() { return satellite->imageCount(livescan_product.first,
-                                                     livescan_product.second) == 0; }))
+  if (!wait_for(
+          [&]()
+          { return satellite->imageCount(livescan_product.first, livescan_product.second) == 0; }))
     TEST_FAILED("The deleted file was not forgotten");
 
   TEST_PASSED();
@@ -1133,6 +1191,7 @@ class tests : public tframe::tests
 
   void test()
   {
+    TEST(minimal_config);
     TEST(producers);
     TEST(menu_parameters);
     TEST(shared_directory);

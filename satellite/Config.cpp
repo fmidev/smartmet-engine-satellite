@@ -8,6 +8,7 @@
 #include <fmt/format.h>
 #include <macgyver/Exception.h>
 #include <spine/ConfigTools.h>
+#include <iostream>
 
 namespace SmartMet
 {
@@ -36,23 +37,29 @@ Config::Config(const std::string& theFileName)
     itsConfig.readFile(theFileName.c_str());
     Spine::expandVariables(itsConfig);
 
+    // Needed only for resolving relative product directories, hence
+    // required only when one is used
     std::string rootdir;
-    if (!itsConfig.lookupValue("rootdir", rootdir))
-      throw Fmi::Exception(BCP, "Setting 'rootdir' is missing from '" + theFileName + "'");
-    itsRootDir = rootdir;
+    if (itsConfig.lookupValue("rootdir", rootdir))
+      itsRootDir = rootdir;
 
-    if (!itsConfig.exists("products"))
-      throw Fmi::Exception(BCP, "Setting 'products' is missing from '" + theFileName + "'");
+    if (itsConfig.exists("products"))
+    {
+      const auto& products = itsConfig.lookup("products");
+      if (!products.isGroup())
+        throw Fmi::Exception(BCP, "Setting 'products' must be a group in '" + theFileName + "'");
 
-    const auto& products = itsConfig.lookup("products");
-    if (!products.isGroup())
-      throw Fmi::Exception(BCP, "Setting 'products' must be a group in '" + theFileName + "'");
+      for (int i = 0; i < products.getLength(); i++)
+        parseProduct(products[i]);
+    }
 
-    for (int i = 0; i < products.getLength(); i++)
-      parseProduct(products[i]);
-
+    // An empty configuration is legal so that the engine can be enabled
+    // before any imagery is, but silence would hide a typo such as
+    // 'product' for 'products'
     if (itsProducts.empty())
-      throw Fmi::Exception(BCP, "No products defined in '" + theFileName + "'");
+      std::cerr << fmt::format(
+          "Warning: no satellite products defined in '{}', there will be no satellite data\n",
+          theFileName);
   }
   catch (const libconfig::ParseException& e)
   {
@@ -102,6 +109,8 @@ void Config::parseProduct(const libconfig::Setting& theSetting)
 
     // Relative directories are relative to the configured root
     std::filesystem::path dir = directory;
+    if (!dir.is_absolute() && itsRootDir.empty())
+      throw Fmi::Exception(BCP, "Setting 'directory' is relative but 'rootdir' is not set");
     product.directory = dir.is_absolute() ? dir : itsRootDir / dir;
 
     if (!theSetting.lookupValue("pattern", product.pattern))

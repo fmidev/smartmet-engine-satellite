@@ -89,6 +89,10 @@ products:
 };
 ```
 
+An empty configuration file is legal: the engine starts, warns that
+there will be no satellite data, and serves empty listings. `rootdir` is
+needed only when a product uses a relative `directory`.
+
 The name of the configuration group is free and is used only in error
 messages; the producer and parameter pair is the identity, and the same
 pair must not appear twice. The same parameter name may of course be used

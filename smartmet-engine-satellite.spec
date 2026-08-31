@@ -3,8 +3,8 @@
 %define SPECNAME smartmet-engine-%{DIRNAME}
 Summary: SmartMet satellite engine
 Name: %{SPECNAME}
-Version: 26.8.26
-Release: 5%{?dist}.fmi
+Version: 26.8.31
+Release: 1%{?dist}.fmi
 License: MIT
 Group: SmartMet/Engines
 URL: https://github.com/fmidev/smartmet-engine-satellite
@@ -83,6 +83,8 @@ rm -rf $RPM_BUILD_ROOT
 %{_includedir}/smartmet/engines/%{DIRNAME}/*.h
 
 %changelog
+* Mon Aug 31 2026 Mika Heiskanen <mika.heiskanen@fmi.fi> 26.8.31-1.fmi
+- An empty configuration is now legal: a warning is printed and the listings are empty
 * Wed Aug 26 2026 Mika Heiskanen <mika.heiskanen@fmi.fi> 26.8.26-5.fmi
 - The warp result reports which overview level the pixels came from
 * Wed Aug 26 2026 Mika Heiskanen <mika.heiskanen@fmi.fi> 26.8.26-4.fmi
