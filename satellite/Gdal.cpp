@@ -28,24 +28,6 @@ namespace Engine
 {
 namespace Satellite
 {
-std::string to_string(BandModel model)
-{
-  switch (model)
-  {
-    case BandModel::RGBA:
-      return "RGBA";
-    case BandModel::RGB:
-      return "RGB";
-    case BandModel::GrayAlpha:
-      return "GrayAlpha";
-    case BandModel::Gray:
-      return "Gray";
-    case BandModel::Float:
-      return "Float";
-  }
-  return "Unknown";
-}
-
 namespace Gdal
 {
 namespace

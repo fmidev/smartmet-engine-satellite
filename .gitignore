@@ -10,3 +10,5 @@ obj/
 *.pb.cpp
 *.c2t
 compile_commands.json
+test/tmp-api-include/
+test/tmp-scan/

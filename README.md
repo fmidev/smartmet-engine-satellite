@@ -121,6 +121,31 @@ The `title`, `abstract` and `keywords` end up in the WMS GetCapabilities
 response. The bounding box is estimated from the newest image and can be
 overridden when the estimate is not wanted.
 
+### Disabling the engine
+
+```
+disabled = true;
+```
+
+A machine which has no image directories can still run the same server
+configuration: with `disabled` the engine reads nothing, scans nothing,
+and hands out an object which has the API but no imagery behind it. The
+server starts normally and everything which does not need satellite
+images works as usual, while a request for a satellite layer fails with
+`Satellite engine not available`, which the WMS plugin turns into an
+error response. An engine which is given no configuration file at all is
+disabled the same way.
+
+The rest of the configuration is not read when the engine is disabled,
+hence a `rootdir` pointing nowhere and products which cannot be found are
+not errors.
+
+An empty configuration file is a different thing. There the engine is
+fully working and merely has nothing in it: the directories are watched
+as soon as products are added to the file, and until then the listings
+are empty. Use the empty file when the imagery is expected to arrive,
+and `disabled` when it is not.
+
 ## Supported data
 
 | Bands | Interpretation | Status |
@@ -212,6 +237,33 @@ caused both deadlocks and heap corruption, hence the parsing is
 serialized with a mutex. The warping itself, which is where the time
 goes, is fully parallel.
 
+## The API and the installed headers
+
+Only the headers a user of the engine needs are installed:
+
+| Header | Contents |
+| --- | --- |
+| `Engine.h` | the API, and the base class a disabled engine is an object of |
+| `ImageInfo.h` | `ImageInfo`, the metadata of one image, and `BandModel` |
+| `Image.h` | `Image` and `ValueImage`, the results of a warp, and `WarpOptions` |
+| `ProductInfo.h` | the product metadata of a GetCapabilities response |
+
+`Config.h`, `Product.h`, `Repository.h`, `Scanner.h`, `Gdal.h` and
+`EngineImpl.h` are internal to the engine and are not installed;
+`internal-headers.mk` is the list.
+
+Everything the installed headers declare is defined inline, so that a
+plugin using the API links and loads even when `satellite.so` is not
+loaded at all. `test/ApiTest.cpp` is the guard: it is compiled against a
+staged copy of the installed headers only and linked without
+`satellite.so`, hence a declaration which is not defined shows up as an
+unresolved symbol when the test is built.
+
+`Engine` itself is that promise: it is a complete class whose every
+method throws `Satellite engine not available`. `EngineImpl`, the derived
+class doing the actual work, is created only when the engine is not
+disabled.
+
 ## Building and testing
 
 ```bash
@@ -219,6 +271,11 @@ make
 sudo make install          # /usr/share/smartmet/engines/satellite.so + headers
 make test
 ```
+
+`make test` builds and runs three programs: `EngineTest` drives a real
+engine through a `Spine::Reactor`, `DisabledTest` does the same with
+`disabled` set, and `ApiTest` checks the installed headers as described
+above.
 
 The images come from the `smartmet-test-data` package, in
 `/usr/share/smartmet/test/data/satellite`. Point `SATELLITE_TEST_DATA`

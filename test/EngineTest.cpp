@@ -1,4 +1,9 @@
 #include "Engine.h"
+// The tests reach into the internals as well: the engine is built here,
+// so the headers which are not installed are available too.
+#include "EngineImpl.h"
+#include "Product.h"
+#include "Scanner.h"
 #include <boost/algorithm/string/join.hpp>
 #include <fmt/format.h>
 #include <macgyver/DateTime.h>
@@ -70,13 +75,14 @@ std::vector<Fmi::DateTime> times_of(const ProductKey& key)
 // ----------------------------------------------------------------------
 
 // init() and shutdown() are protected because the reactor drives them;
-// this test drives an instance of its own.
-class BareEngine : public Engine
+// this test drives an instance of its own. It must be an EngineImpl,
+// since Engine itself is the API of an engine which is not there.
+class BareEngine : public EngineImpl
 {
  public:
-  using Engine::Engine;
-  using Engine::init;
-  using Engine::shutdown;
+  using EngineImpl::EngineImpl;
+  using EngineImpl::init;
+  using EngineImpl::shutdown;
 };
 
 void minimal_config()

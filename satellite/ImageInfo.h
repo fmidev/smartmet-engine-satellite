@@ -34,7 +34,26 @@ enum class BandModel
   Float       // 1 x Float32: uncoloured data, not supported yet
 };
 
-std::string to_string(BandModel model);
+// Defined inline so that the header alone is enough: a plugin must be
+// able to use the API without the engine library being loaded.
+
+inline std::string to_string(BandModel model)
+{
+  switch (model)
+  {
+    case BandModel::RGBA:
+      return "RGBA";
+    case BandModel::RGB:
+      return "RGB";
+    case BandModel::GrayAlpha:
+      return "GrayAlpha";
+    case BandModel::Gray:
+      return "Gray";
+    case BandModel::Float:
+      return "Float";
+  }
+  return "Unknown";
+}
 
 struct ImageInfo
 {

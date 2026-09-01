@@ -45,16 +45,34 @@ into the tests or the test data package: those are proprietary.
 ## Source layout
 
 ```
-satellite/Engine.{h,cpp}      Engine class, the API the WMS layer uses
+satellite/Engine.h            The API the WMS layer uses, and the base class
+satellite/EngineImpl.{h,cpp}  The class doing the work, plus engine_class_creator
+satellite/Image.h             Image, ValueImage and WarpOptions
+satellite/ImageInfo.h         Metadata of one image file
+satellite/ProductInfo.h       Product metadata for GetCapabilities
 satellite/Config.{h,cpp}      libconfig parsing
 satellite/Product.h           One product's configuration
-satellite/ImageInfo.h         Metadata of one image file
 satellite/Repository.{h,cpp}  The catalog: (producer,parameter) -> time -> image
 satellite/Scanner.{h,cpp}     DirectoryMonitor keeping the catalog current
 satellite/Gdal.{h,cpp}        All GDAL and PROJ usage
 ```
 
+Only `Engine.h`, `Image.h`, `ImageInfo.h` and `ProductInfo.h` are
+installed. `internal-headers.mk` holds the list of the ones which are
+not, and both the top level Makefile and `test/Makefile` include it.
+
 ## Things to be careful about
+
+**The installed headers must not need the library.** `Engine.h` declares
+the API and nothing else: every method of `Engine` is defined inline and
+throws `Satellite engine not available`, and `EngineImpl` overrides them
+with the real work. A plugin therefore links and loads even when
+`satellite.so` is not loaded, and a `disabled = true;` configuration
+gives the server a base class object instead of an implementation.
+Nothing may be added to an installed header which is defined in a `.cpp`
+file, `to_string(BandModel)` included. `test/ApiTest.cpp` guards this: it
+is compiled against a staged copy of the installed headers only and
+linked without `satellite.so`, so a broken promise is a link error.
 
 **GDAL and PROJ threading.** `GDALDataset` must never be shared between
 threads, so every call opens and closes its own. Coordinate reference
