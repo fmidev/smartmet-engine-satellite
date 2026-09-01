@@ -3,7 +3,7 @@
 %define SPECNAME smartmet-engine-%{DIRNAME}
 Summary: SmartMet satellite engine
 Name: %{SPECNAME}
-Version: 26.8.31
+Version: 26.9.1
 Release: 1%{?dist}.fmi
 License: MIT
 Group: SmartMet/Engines
@@ -83,6 +83,10 @@ rm -rf $RPM_BUILD_ROOT
 %{_includedir}/smartmet/engines/%{DIRNAME}/*.h
 
 %changelog
+* Tue Sep  1 2026 Andris Pavenis <andris.pavenis@fmi.fi> 26.9.1-1.fmi
+- Engine.h now holds the API only and the work moved to EngineImpl
+- Added support for disabling the engine with 'disabled = true;'
+- Only the headers of the API are installed
 * Mon Aug 31 2026 Mika Heiskanen <mika.heiskanen@fmi.fi> 26.8.31-1.fmi
 - An empty configuration is now legal: a warning is printed and the listings are empty
 * Wed Aug 26 2026 Mika Heiskanen <mika.heiskanen@fmi.fi> 26.8.26-5.fmi
