@@ -57,6 +57,7 @@ Provides: %{SPECNAME}-devel
 Requires: %{SPECNAME} = %{version}-%{release}
 Requires: smartmet-library-spine-devel >= 26.8.24
 Requires: smartmet-library-macgyver-devel >= 26.8.24
+Requires: %{smartmet_boost}-devel
 %description -n %{SPECNAME}-devel
 SmartMet %{SPECNAME} development headers.
 
