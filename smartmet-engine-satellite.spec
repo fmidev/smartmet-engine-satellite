@@ -35,6 +35,7 @@ BuildRequires: smartmet-utils-devel >= 26.7.14
 BuildRequires: libconfig17-devel
 BuildRequires: %{smartmet_fmt_devel}
 BuildRequires: gdal312-devel
+#TestRequires: %{smartmet_boost}-devel
 #TestRequires: smartmet-test-data >= 26.8.26
 #TestRequires: smartmet-library-regression
 Requires: %{smartmet_boost}-thread
