@@ -56,7 +56,7 @@ test: $(PROG)
 	done; rm -rf $(SATELLITE_SCAN_DIR); exit $$rc
 
 $(ENGINE_PROG) : % : %.cpp ../satellite.so
-	$(CXX) $(CFLAGS) -o $@ $@.cpp $(INCLUDES) ../satellite.so $(LIBS)
+	$(CXX) $(CFLAGS) $(INCLUDES) -o $@ $@.cpp ../satellite.so $(LIBS)
 
 # Only the installed headers, and no satellite.so on the command line:
 # anything an installed header declares but does not define is an
@@ -70,4 +70,4 @@ $(API_HDRDIR): $(API_HDRS)
 	@touch $(API_HDRDIR)
 
 $(API_PROG) : % : %.cpp $(API_HDRDIR)
-	$(CXX) $(CFLAGS) -o $@ $@.cpp -I$(API_INCDIR) -isystem /usr/include/smartmet $(LIBS)
+	$(CXX) $(CFLAGS) $(INCLUDES) -o $@ $@.cpp -I$(API_INCDIR) -isystem /usr/include/smartmet $(LIBS)
