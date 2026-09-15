@@ -61,6 +61,7 @@ Metop-B and Metop-C from one pass to the next.
 
 ```
 rootdir = "/smartmet/satellite/weather";
+maxthreads = 25;   # threads reading image metadata in the first scan, default 10
 
 products:
 {
@@ -244,11 +245,21 @@ are read. The scanner works out from the file names which of the new
 files would survive the cap and reads the metadata of those only,
 newest first. This is what keeps the first scan short: the production
 directories hold weeks of history, up to some 1,300 files per composite,
-and reading the metadata of a file is a GDAL open over NFS. The first
-scan runs the directories in parallel, eight at a time, and prints how
-many images it read and how long it took. Set `max_files` to what the
-time dimension of the layer needs, not to what the directory happens to
-hold.
+and reading the metadata of a file is a GDAL open over NFS. Set
+`max_files` to what the time dimension of the layer needs, not to what
+the directory happens to hold.
+
+The first scan has two phases. The directories are listed first, in
+parallel, and the reads they call for are collected into one queue,
+newest images first. Then `maxthreads` threads work through the queue,
+so the biggest directory does not hold the others back and every
+product gets its latest image early. Each read is a GDAL open over NFS,
+where the wait is for the network rather than the CPU, hence a thread
+count well above the core count pays off; `maxthreads = 25` is what the
+querydata engine runs with. The bounding box estimate, which parses the
+CRS under the PROJ mutex, is cached per distinct grid so that the mutex
+does not serialize the threads. The scan prints how many images it read,
+with how many threads, and how long it took.
 
 Opening a file makes GDAL look for sidecar files next to it, such as
 `.aux.xml` metadata and `.ovr` overviews, and to find them it lists the

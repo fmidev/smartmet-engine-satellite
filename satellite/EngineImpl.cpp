@@ -48,7 +48,7 @@ void EngineImpl::init()
       itsRepository.add(product);
 
     itsScanner = std::make_unique<Scanner>(itsRepository);
-    itsScanner->start(itsConfig->products());
+    itsScanner->start(itsConfig->products(), itsConfig->maxThreads());
   }
   catch (...)
   {

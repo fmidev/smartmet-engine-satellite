@@ -11,10 +11,12 @@
 #include <macgyver/StringConversion.h>
 #include <macgyver/ThreadName.h>
 #include <macgyver/TimeParser.h>
+#include <spine/Convenience.h>
 #include <sys/stat.h>
 #include <algorithm>
 #include <functional>
 #include <iostream>
+#include <iterator>
 #include <set>
 
 namespace SmartMet
@@ -33,10 +35,6 @@ std::time_t directory_time(const std::filesystem::path& thePath)
     return -1;
   return status.st_mtime;
 }
-
-// Threads used for the first scan, which is where the time goes. The
-// directories are independent and the wait is for NFS, not the CPU.
-const std::size_t first_scan_threads = 8;
 
 }  // namespace
 
@@ -100,10 +98,12 @@ Fmi::DateTime Scanner::parseTime(const std::string& theFileName)
  */
 // ----------------------------------------------------------------------
 
-void Scanner::start(const std::map<ProductKey, Product>& theProducts)
+void Scanner::start(const std::map<ProductKey, Product>& theProducts, int theMaxThreads)
 {
   try
   {
+    const std::size_t max_threads = std::max(1, theMaxThreads);
+
     // Group the products by directory
 
     std::map<std::filesystem::path, Directory> directories;
@@ -126,11 +126,12 @@ void Scanner::start(const std::map<ProductKey, Product>& theProducts)
       // machine to another before, so it is polled like the others and
       // picked up if it appears.
       if (!std::filesystem::is_directory(path))
-        std::cerr << fmt::format(
-            "Warning: satellite directory '{}' does not exist, its {} product(s) will be empty "
-            "until it appears\n",
-            path.string(),
-            directory.watches.size());
+        std::cerr << Spine::log_time_str()
+                  << fmt::format(
+                         " Warning: satellite directory '{}' does not exist, its {} "
+                         "product(s) will be empty until it appears\n",
+                         path.string(),
+                         directory.watches.size());
 
       itsDirectories.push_back(std::move(directory));
     }
@@ -141,40 +142,86 @@ void Scanner::start(const std::map<ProductKey, Product>& theProducts)
       return;
     }
 
-    // The first scan, directories in parallel. The engine must not
-    // report itself ready before it is complete, otherwise the first
-    // requests would find no images.
+    // The first scan. The engine must not report itself ready before it
+    // is complete, otherwise the first requests would find no images.
+    // The directories are listed first, in parallel, and the reads they
+    // call for are collected. Then the reads are done with max_threads
+    // threads from one queue, newest images first, so that the biggest
+    // directory does not hold the others back and every product gets
+    // its latest image early. Each read is a GDAL open over NFS, so the
+    // wait is for the network rather than the CPU.
 
     const auto started = std::chrono::steady_clock::now();
+
+    const auto run_workers = [&](std::size_t count, const std::function<void(std::size_t)>& work)
     {
-      std::atomic<std::size_t> next{0};
       std::vector<std::thread> workers;
-      const auto count = std::min(itsDirectories.size(), first_scan_threads);
       for (std::size_t i = 0; i < count; i++)
-      {
         workers.emplace_back(
-            [this, &next]()
+            [&work, i]()
             {
               Fmi::set_thread_name("sat-scan");
-              for (;;)
-              {
-                const auto index = next++;
-                if (index >= itsDirectories.size() || itsShutdownRequested)
-                  return;
-                scan(itsDirectories[index]);
-              }
+              work(i);
             });
-      }
       for (auto& worker : workers)
         worker.join();
+    };
+
+    // Phase 1: list
+
+    std::vector<std::vector<Job>> listed(itsDirectories.size());
+    {
+      std::atomic<std::size_t> next{0};
+      run_workers(std::min(itsDirectories.size(), max_threads),
+                  [&](std::size_t)
+                  {
+                    for (;;)
+                    {
+                      const auto index = next++;
+                      if (index >= itsDirectories.size() || itsShutdownRequested)
+                        return;
+                      scan(itsDirectories[index], &listed[index]);
+                    }
+                  });
+    }
+
+    std::vector<Job> jobs;
+    for (auto& part : listed)
+      jobs.insert(
+          jobs.end(), std::make_move_iterator(part.begin()), std::make_move_iterator(part.end()));
+    listed.clear();
+
+    std::stable_sort(jobs.begin(),
+                     jobs.end(),
+                     [](const Job& a, const Job& b)
+                     { return a.candidate.first > b.candidate.first; });
+
+    // Phase 2: read
+
+    {
+      std::atomic<std::size_t> next{0};
+      run_workers(std::min(jobs.size(), max_threads),
+                  [&](std::size_t)
+                  {
+                    for (;;)
+                    {
+                      const auto index = next++;
+                      if (index >= jobs.size() || itsShutdownRequested)
+                        return;
+                      readOne(*jobs[index].watch, jobs[index].candidate);
+                    }
+                  });
     }
 
     const auto elapsed = std::chrono::duration<double>(std::chrono::steady_clock::now() - started);
-    std::cout << fmt::format(
-        "Satellite engine: first scan of {} directories read {} images in {:.1f} seconds\n",
-        itsDirectories.size(),
-        itsImagesRead.load(),
-        elapsed.count());
+    std::cout << Spine::log_time_str()
+              << fmt::format(
+                     " Satellite engine: first scan of {} directories read {} images "
+                     "with {} threads in {:.1f} seconds\n",
+                     itsDirectories.size(),
+                     itsImagesRead.load(),
+                     std::min(jobs.size(), max_threads),
+                     elapsed.count());
 
     itsReady = true;
 
@@ -242,7 +289,7 @@ void Scanner::run()
  */
 // ----------------------------------------------------------------------
 
-void Scanner::scan(Directory& theDirectory)
+void Scanner::scan(Directory& theDirectory, std::vector<Job>* theJobs)
 {
   try
   {
@@ -261,7 +308,7 @@ void Scanner::scan(Directory& theDirectory)
     if (mtime == theDirectory.mtime && theDirectory.settled)
       return;  // Nothing has arrived or left
 
-    list(theDirectory, mtime);
+    list(theDirectory, mtime, theJobs);
   }
   catch (...)
   {
@@ -281,7 +328,7 @@ void Scanner::scan(Directory& theDirectory)
  */
 // ----------------------------------------------------------------------
 
-void Scanner::list(Directory& theDirectory, std::time_t theTime)
+void Scanner::list(Directory& theDirectory, std::time_t theTime, std::vector<Job>* theJobs)
 {
   ++itsListings;
   const std::time_t listed_at = std::time(nullptr);
@@ -346,7 +393,7 @@ void Scanner::list(Directory& theDirectory, std::time_t theTime)
     if (itsShutdownRequested)
       return;
     if (!candidates[i].empty())
-      read(theDirectory.watches[i], std::move(candidates[i]));
+      read(theDirectory.watches[i], std::move(candidates[i]), theJobs);
   }
 
   theDirectory.names = std::move(names);
@@ -391,7 +438,9 @@ void Scanner::forget(Directory& theDirectory)
  */
 // ----------------------------------------------------------------------
 
-void Scanner::read(const Watch& theWatch, std::vector<Candidate> theCandidates)
+void Scanner::read(const Watch& theWatch,
+                   std::vector<Candidate> theCandidates,
+                   std::vector<Job>* theJobs)
 {
   const auto max_files = theWatch.max_files;
 
@@ -417,28 +466,50 @@ void Scanner::read(const Watch& theWatch, std::vector<Candidate> theCandidates)
   }
 
   // Newest first, so that the latest image is available as early as
-  // possible while a long first scan is still going on
+  // possible while a long scan is still going on
 
   std::sort(theCandidates.begin(), theCandidates.end(), std::greater<>());
 
-  for (const auto& [time, path] : theCandidates)
+  if (theJobs != nullptr)
+  {
+    // The first scan reads later, with many threads. The watch outlives
+    // the jobs: the directories are not touched once the scan has begun.
+    for (auto& candidate : theCandidates)
+      theJobs->push_back(Job{&theWatch, std::move(candidate)});
+    return;
+  }
+
+  for (const auto& candidate : theCandidates)
   {
     if (itsShutdownRequested)
       return;
+    readOne(theWatch, candidate);
+  }
+}
 
-    try
-    {
-      ++itsImagesRead;
-      auto info = std::make_shared<ImageInfo>(Gdal::readMetadata(path.string(), time));
-      itsRepository.insert(theWatch.key, info);
-    }
-    catch (const std::exception& e)
-    {
-      // A single unreadable file must not stop the scan. Incomplete
-      // files appear in the directories while they are being written.
-      std::cerr << fmt::format(
-          "Warning: satellite engine skipped '{}': {}\n", path.string(), e.what());
-    }
+// ----------------------------------------------------------------------
+/*!
+ * \brief Read the metadata of one image into the repository
+ */
+// ----------------------------------------------------------------------
+
+void Scanner::readOne(const Watch& theWatch, const Candidate& theCandidate)
+{
+  const auto& [time, path] = theCandidate;
+
+  try
+  {
+    ++itsImagesRead;
+    auto info = std::make_shared<ImageInfo>(Gdal::readMetadata(path.string(), time));
+    itsRepository.insert(theWatch.key, info);
+  }
+  catch (const std::exception& e)
+  {
+    // A single unreadable file must not stop the scan. Incomplete
+    // files appear in the directories while they are being written.
+    std::cerr << Spine::log_time_str()
+              << fmt::format(
+                     " Warning: satellite engine skipped '{}': {}\n", path.string(), e.what());
   }
 }
 

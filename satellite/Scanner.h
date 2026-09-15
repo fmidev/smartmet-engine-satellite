@@ -52,7 +52,9 @@ class Scanner
 
   // Scan the directories of the given products once and start polling
   // them. Returns when the first scan of every directory has completed.
-  void start(const std::map<ProductKey, Product>& theProducts);
+  // The first scan reads the metadata of the images with the given
+  // number of threads.
+  void start(const std::map<ProductKey, Product>& theProducts, int theMaxThreads);
 
   void stop();
 
@@ -106,10 +108,20 @@ class Scanner
 
   using Candidate = std::pair<Fmi::DateTime, std::filesystem::path>;
 
-  void scan(Directory& theDirectory);
-  void list(Directory& theDirectory, std::time_t theTime);
+  // A metadata read postponed from a listing, so that the first scan can
+  // list first and read with many threads afterwards
+  struct Job
+  {
+    const Watch* watch;
+    Candidate candidate;
+  };
+
+  // With a job list the reads are collected into it instead of being done
+  void scan(Directory& theDirectory, std::vector<Job>* theJobs = nullptr);
+  void list(Directory& theDirectory, std::time_t theTime, std::vector<Job>* theJobs);
   void forget(Directory& theDirectory);
-  void read(const Watch& theWatch, std::vector<Candidate> theCandidates);
+  void read(const Watch& theWatch, std::vector<Candidate> theCandidates, std::vector<Job>* theJobs);
+  void readOne(const Watch& theWatch, const Candidate& theCandidate);
   void run();
 
   Repository& itsRepository;

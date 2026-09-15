@@ -6,6 +6,7 @@
 
 #include "Gdal.h"
 #include <fmt/format.h>
+#include <fmt/ranges.h>
 #include <macgyver/Exception.h>
 #include <macgyver/Hash.h>
 #include <algorithm>
@@ -19,6 +20,7 @@
 #include <gdal_alg.h>
 #include <gdalwarper.h>
 #include <limits>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <ogr_spatialref.h>
@@ -171,7 +173,7 @@ void deduce_band_model(GDALDatasetH ds, ImageInfo& info)
  */
 // ----------------------------------------------------------------------
 
-std::optional<std::array<double, 4>> estimate_bbox(const ImageInfo& info)
+std::optional<std::array<double, 4>> compute_bbox(const ImageInfo& info)
 {
   if (info.wkt.empty())
     return {};
@@ -246,6 +248,46 @@ std::optional<std::array<double, 4>> estimate_bbox(const ImageInfo& info)
     return {};
 
   return std::array<double, 4>{minx, miny, maxx, maxy};
+}
+
+// ----------------------------------------------------------------------
+/*!
+ * \brief Estimate the WGS84 bounding box of an image, with a cache
+ *
+ * All the images of a product share one grid, so the estimate is the
+ * same for thousands of files, and computing it means parsing the WKT
+ * under the PROJ mutex. With the first scan reading files from many
+ * threads that mutex would serialize them; the cache takes it once per
+ * distinct grid instead. The key is the grid: the CRS, the size and the
+ * geotransform.
+ */
+// ----------------------------------------------------------------------
+
+std::optional<std::array<double, 4>> estimate_bbox(const ImageInfo& info)
+{
+  static std::mutex cache_mutex;
+  static std::map<std::string, std::optional<std::array<double, 4>>> cache;
+
+  const auto key = fmt::format(
+      "{}|{}|{}|{}", info.width, info.height, fmt::join(info.geotransform, ","), info.wkt);
+
+  {
+    std::lock_guard<std::mutex> lock(cache_mutex);
+    auto pos = cache.find(key);
+    if (pos != cache.end())
+      return pos->second;
+  }
+
+  auto bbox = compute_bbox(info);
+
+  {
+    std::lock_guard<std::mutex> lock(cache_mutex);
+    if (cache.size() >= 1000)  // grids change with the seasons at most, this is never reached
+      cache.clear();
+    cache.emplace(key, bbox);
+  }
+
+  return bbox;
 }
 
 // ----------------------------------------------------------------------

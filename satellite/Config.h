@@ -25,11 +25,15 @@ class Config
 
   const std::map<ProductKey, Product>& products() const { return itsProducts; }
 
+  // Threads reading image metadata during the first scan
+  int maxThreads() const { return itsMaxThreads; }
+
  private:
   void parseProduct(const libconfig::Setting& theSetting);
 
   libconfig::Config itsConfig;
   std::filesystem::path itsRootDir;
+  int itsMaxThreads{10};
   std::map<ProductKey, Product> itsProducts;
 };
 

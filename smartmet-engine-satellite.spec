@@ -4,7 +4,7 @@
 Summary: SmartMet satellite engine
 Name: %{SPECNAME}
 Version: 26.9.15
-Release: 2%{?dist}.fmi
+Release: 3%{?dist}.fmi
 License: MIT
 Group: SmartMet/Engines
 URL: https://github.com/fmidev/smartmet-engine-satellite
@@ -85,6 +85,10 @@ rm -rf $RPM_BUILD_ROOT
 %{_includedir}/smartmet/engines/%{DIRNAME}/*.h
 
 %changelog
+* Tue Sep 15 2026 Mika Heiskanen <mika.heiskanen@fmi.fi> 26.9.15-3.fmi
+- The first scan reads image metadata with 'maxthreads' threads from one queue, newest first
+- The bounding box estimate is cached per grid so that the PROJ mutex does not serialize the reads
+- The warnings and the first scan report carry a timestamp like the other engines
 * Tue Sep 15 2026 Mika Heiskanen <mika.heiskanen@fmi.fi> 26.9.15-2.fmi
 - Poll the directories by their modification time and list them only when it changes
 - List file names only, one listing per directory instead of one per product

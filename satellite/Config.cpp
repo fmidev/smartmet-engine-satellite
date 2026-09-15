@@ -8,6 +8,7 @@
 #include <fmt/format.h>
 #include <macgyver/Exception.h>
 #include <spine/ConfigTools.h>
+#include <spine/Convenience.h>
 #include <iostream>
 
 namespace SmartMet
@@ -43,6 +44,12 @@ Config::Config(const std::string& theFileName)
     if (itsConfig.lookupValue("rootdir", rootdir))
       itsRootDir = rootdir;
 
+    // The first scan reads the metadata of every image it keeps, one
+    // GDAL open each, and over NFS that is latency rather than work.
+    // The same setting as in the querydata engine configuration.
+    if (itsConfig.lookupValue("maxthreads", itsMaxThreads) && itsMaxThreads < 1)
+      throw Fmi::Exception(BCP, "Setting 'maxthreads' must be at least 1 in '" + theFileName + "'");
+
     if (itsConfig.exists("products"))
     {
       const auto& products = itsConfig.lookup("products");
@@ -57,9 +64,11 @@ Config::Config(const std::string& theFileName)
     // before any imagery is, but silence would hide a typo such as
     // 'product' for 'products'
     if (itsProducts.empty())
-      std::cerr << fmt::format(
-          "Warning: no satellite products defined in '{}', there will be no satellite data\n",
-          theFileName);
+      std::cerr << Spine::log_time_str()
+                << fmt::format(
+                       " Warning: no satellite products defined in '{}', there will be no "
+                       "satellite data\n",
+                       theFileName);
   }
   catch (const libconfig::ParseException& e)
   {
