@@ -658,7 +658,9 @@ class OpenOptionsGuard
  */
 // ----------------------------------------------------------------------
 
-ImageInfo readMetadata(const std::string& thePath, const Fmi::DateTime& theTime)
+ImageInfo readMetadata(const std::string& thePath,
+                       const Fmi::DateTime& theTime,
+                       const ImageInfo* theSameGrid)
 {
   try
   {
@@ -683,11 +685,27 @@ ImageInfo readMetadata(const std::string& thePath, const Fmi::DateTime& theTime)
     if (GDALGetGeoTransform(ds.get(), info.geotransform.data()) != CE_None)
       throw Fmi::Exception(BCP, "The image has no geotransform");
 
-    const char* wkt = GDALGetProjectionRef(ds.get());
-    if (wkt != nullptr)
-      info.wkt = wkt;
-    if (info.wkt.empty())
-      throw Fmi::Exception(BCP, "The image has no coordinate reference system");
+    // Every image of a product shares one grid, and building the CRS from
+    // the GeoTIFF keys is the costly part of reading the metadata: GDAL
+    // resolves the keys through the PROJ database for every file. When
+    // the caller knows an image of the same size and geotransform, its
+    // CRS is reused. The warp does not depend on this, it opens the file
+    // and uses the CRS of the dataset itself.
+
+    if (theSameGrid != nullptr && theSameGrid->width == info.width &&
+        theSameGrid->height == info.height && theSameGrid->geotransform == info.geotransform &&
+        !theSameGrid->wkt.empty())
+    {
+      info.wkt = theSameGrid->wkt;
+    }
+    else
+    {
+      const char* wkt = GDALGetProjectionRef(ds.get());
+      if (wkt != nullptr)
+        info.wkt = wkt;
+      if (info.wkt.empty())
+        throw Fmi::Exception(BCP, "The image has no coordinate reference system");
+    }
 
     deduce_band_model(ds.get(), info);
 

@@ -4,7 +4,7 @@
 Summary: SmartMet satellite engine
 Name: %{SPECNAME}
 Version: 26.9.15
-Release: 3%{?dist}.fmi
+Release: 4%{?dist}.fmi
 License: MIT
 Group: SmartMet/Engines
 URL: https://github.com/fmidev/smartmet-engine-satellite
@@ -85,6 +85,8 @@ rm -rf $RPM_BUILD_ROOT
 %{_includedir}/smartmet/engines/%{DIRNAME}/*.h
 
 %changelog
+* Tue Sep 15 2026 Mika Heiskanen <mika.heiskanen@fmi.fi> 26.9.15-4.fmi
+- Reuse the CRS of the newest image of the product when a file shares its grid, six times less CPU per file
 * Tue Sep 15 2026 Mika Heiskanen <mika.heiskanen@fmi.fi> 26.9.15-3.fmi
 - The first scan reads image metadata with 'maxthreads' threads from one queue, newest first
 - The bounding box estimate is cached per grid so that the PROJ mutex does not serialize the reads

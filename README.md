@@ -258,7 +258,10 @@ where the wait is for the network rather than the CPU, hence a thread
 count well above the core count pays off; `maxthreads = 25` is what the
 querydata engine runs with. The bounding box estimate, which parses the
 CRS under the PROJ mutex, is cached per distinct grid so that the mutex
-does not serialize the threads. The scan prints how many images it read,
+does not serialize the threads, and a file whose size and geotransform
+agree with the newest image of its product reuses that image's CRS
+instead of having GDAL build it from the GeoTIFF keys through the PROJ
+database, which was most of the CPU spent per file. The scan prints how many images it read,
 with how many threads, and how long it took.
 
 Opening a file makes GDAL look for sidecar files next to it, such as

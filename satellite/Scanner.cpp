@@ -500,7 +500,12 @@ void Scanner::readOne(const Watch& theWatch, const Candidate& theCandidate)
   try
   {
     ++itsImagesRead;
-    auto info = std::make_shared<ImageInfo>(Gdal::readMetadata(path.string(), time));
+
+    // The newest known image of the product shares the grid of this one
+    // in all but the rarest cases, and lets the CRS be reused
+    const auto sibling = itsRepository.find(theWatch.key, {}, Fmi::TimeDuration(0, 0, 0));
+
+    auto info = std::make_shared<ImageInfo>(Gdal::readMetadata(path.string(), time, sibling.get()));
     itsRepository.insert(theWatch.key, info);
   }
   catch (const std::exception& e)

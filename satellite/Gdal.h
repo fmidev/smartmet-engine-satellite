@@ -31,7 +31,14 @@ void initialize();
 
 // Read the metadata of an image. The valid time is not stored in the
 // file in a reliable way, hence it is passed in by the caller.
-ImageInfo readMetadata(const std::string& thePath, const Fmi::DateTime& theTime);
+// theSameGrid may name an image known to share the grid of this one,
+// typically the newest image of the same product. If the size and the
+// geotransform agree its CRS is reused, which spares GDAL from building
+// the CRS from the GeoTIFF keys through the PROJ database, the costly
+// part of reading the metadata.
+ImageInfo readMetadata(const std::string& thePath,
+                       const Fmi::DateTime& theTime,
+                       const ImageInfo* theSameGrid = nullptr);
 
 // Warp an image to the requested projection using nearest neighbour
 // interpolation. Areas not covered by the image are left transparent.
