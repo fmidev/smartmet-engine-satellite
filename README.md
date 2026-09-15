@@ -217,6 +217,26 @@ interfere with each other even though they share a directory: one
 composite standing still cannot delay another, and an arriving image is
 credited to the product whose pattern matches it and to no other.
 
+Only the newest `max_files` images of a product are kept, and only they
+are read. The scanner works out from the file names which of the files
+a scan reports would survive the cap and reads the metadata of those
+only, newest first. This is what keeps the first scan short: the
+production directories hold weeks of history, up to some 1,300 files per
+composite, and reading the metadata of a file is a GDAL open over NFS.
+Set `max_files` to what the time dimension of the layer needs, not to
+what the directory happens to hold.
+
+Opening a file makes GDAL look for sidecar files next to it, such as
+`.aux.xml` metadata and `.ovr` overviews, and to find them it lists the
+directory, which with tens of thousands of entries on NFS costs more than
+the open itself. The engine therefore opens its images with
+`GDAL_DISABLE_READDIR_ON_OPEN=EMPTY_DIR` and `GDAL_PAM_ENABLED=NO`. The
+images carry everything they need, the CRS embedded and the overviews
+internal. The options are set for the calling thread for the duration of
+the call only, so other users of GDAL sharing the request threads keep
+their sidecar files, and a setting of the same option in the environment
+wins over the engine's default.
+
 The one subtlety is that the monitor is asked for MODIFY events even
 though the production system never rewrites an image. Without that
 request the monitor skips listing a directory whose own modification time

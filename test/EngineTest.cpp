@@ -41,6 +41,7 @@ const ProductKey float_product = {"meteosat", "ctth_tempe"};
 const ProductKey series_product = {"meteosat", "fog_rgb"};
 const ProductKey livescan_product = {"testsat", "livescan"};
 const ProductKey livescan_other_product = {"testsat", "livescan_other"};
+const ProductKey capped_product = {"testsat", "capped"};
 
 // These two share a directory and one name is a prefix of the other
 const ProductKey shared_dir_a = {"metop", "ir108"};
@@ -163,7 +164,7 @@ void menu_parameters()
 
   // Two products may share a directory
   auto testsat = satellite->parameters("testsat");
-  const std::vector<std::string> testsat_expected = {"livescan", "livescan_other"};
+  const std::vector<std::string> testsat_expected = {"capped", "livescan", "livescan_other"};
   if (testsat != testsat_expected)
     TEST_FAILED("Expected the testsat parameters " + boost::algorithm::join(testsat_expected, ",") +
                 ", got " + boost::algorithm::join(testsat, ","));
@@ -914,6 +915,117 @@ void live_scan()
 
 // ----------------------------------------------------------------------
 /*!
+ * \brief Files beyond max_files must not be opened at all
+ *
+ * The production directories hold weeks of history and the first scan
+ * used to read the metadata of every file only to throw most of it
+ * away. The scanner now reads the newest max_files only, which the
+ * imagesRead() counter verifies. The files are renamed into place
+ * newest first, so that the result is the same whichever way a scan
+ * interleaves with the renames.
+ */
+// ----------------------------------------------------------------------
+
+void max_files_cap()
+{
+  const char* dir = getenv("SATELLITE_SCAN_DIR");
+  if (dir == nullptr)
+    TEST_FAILED("SATELLITE_SCAN_DIR is not set");
+
+  if (satellite->imageCount(capped_product.first, capped_product.second) != 0)
+    TEST_FAILED("The capped product was not empty at the start");
+
+  auto source = find_image(series_product, {}, Fmi::TimeDuration(0, 0, 0));
+  if (!source)
+    TEST_FAILED("No image available for '" + name_of(series_product) + "'");
+
+  // Newest first
+  const std::vector<std::string> stamps = {
+      "20230929_1545", "20230929_1530", "20230929_1515", "20230929_1500"};
+
+  std::vector<std::filesystem::path> staged;
+  std::vector<std::filesystem::path> targets;
+  for (const auto& stamp : stamps)
+  {
+    staged.push_back(std::filesystem::path(dir) / (stamp + "_Meteosat-10_capped.tmp"));
+    targets.push_back(std::filesystem::path(dir) / (stamp + "_Meteosat-10_capped.tif"));
+  }
+
+  const auto cleanup = [&]()
+  {
+    for (const auto& path : staged)
+      std::filesystem::remove(path);
+    for (const auto& path : targets)
+      std::filesystem::remove(path);
+  };
+
+  // Copy under names the pattern does not match, then rename them into
+  // place so that the copies do not appear half written to the scanner
+  for (const auto& path : staged)
+    std::filesystem::copy_file(
+        source->path, path, std::filesystem::copy_options::overwrite_existing);
+
+  const auto before = satellite->imagesRead();
+
+  for (std::size_t i = 0; i < staged.size(); i++)
+    std::filesystem::rename(staged[i], targets[i]);
+
+  const auto wait_for = [](const std::function<bool()>& condition)
+  {
+    for (int i = 0; i < 100; i++)
+    {
+      if (condition())
+        return true;
+      std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    }
+    return false;
+  };
+
+  const auto count = [&]()
+  { return satellite->imageCount(capped_product.first, capped_product.second); };
+
+  if (!wait_for([&]() { return count() == 2; }))
+  {
+    cleanup();
+    TEST_FAILED("Two images were not available within 20 seconds");
+  }
+
+  // Let further scans run, nothing may change
+  std::this_thread::sleep_for(std::chrono::milliseconds(2500));
+
+  const auto times = times_of(capped_product);
+  std::vector<std::string> got;
+  for (const auto& time : times)
+    got.push_back(Fmi::to_iso_string(time));
+
+  const std::vector<std::string> expected = {"20230929T153000", "20230929T154500"};
+  if (got != expected)
+  {
+    cleanup();
+    TEST_FAILED("Expected the times " + boost::algorithm::join(expected, ",") + ", got " +
+                boost::algorithm::join(got, ","));
+  }
+
+  const auto read = satellite->imagesRead() - before;
+  if (read != 2)
+  {
+    cleanup();
+    TEST_FAILED(
+        fmt::format("Read the metadata of {} files, expected 2: files beyond max_files "
+                    "must not be opened",
+                    read));
+  }
+
+  cleanup();
+
+  if (!wait_for([&]() { return count() == 0; }))
+    TEST_FAILED("The deleted files were not forgotten within 20 seconds");
+
+  TEST_PASSED();
+}
+
+// ----------------------------------------------------------------------
+/*!
  * \brief Two products of one directory must not see each other's files
  *
  * One directory holds all the composites of one instrument, so the file
@@ -1216,6 +1328,7 @@ class tests : public tframe::tests
     TEST(warp_values_outside_data);
     TEST(warp_wrong_kind_fails);
     TEST(live_scan);
+    TEST(max_files_cap);
     TEST(staggered_updates);
     TEST(modified_in_place);
     TEST(warp_speed);

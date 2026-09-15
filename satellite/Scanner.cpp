@@ -11,7 +11,11 @@
 #include <macgyver/StringConversion.h>
 #include <macgyver/ThreadName.h>
 #include <macgyver/TimeParser.h>
+#include <algorithm>
+#include <functional>
 #include <iostream>
+#include <utility>
+#include <vector>
 
 namespace SmartMet
 {
@@ -122,7 +126,7 @@ void Scanner::start(const std::map<ProductKey, Product>& theProducts)
           Fmi::DirectoryMonitor::CREATE | Fmi::DirectoryMonitor::DELETE |
               Fmi::DirectoryMonitor::MODIFY);
 
-      itsWatchers.insert({watcher, key});
+      itsWatchers.insert({watcher, Watched{key, product.max_files}});
     }
 
     if (itsWatchers.empty())
@@ -182,7 +186,15 @@ void Scanner::update(Fmi::DirectoryMonitor::Watcher theWatcher,
     if (pos == itsWatchers.end())
       return;
 
-    const auto& key = pos->second;
+    const auto& key = pos->second.key;
+    const auto max_files = pos->second.max_files;
+
+    // Removals first, so that a rewritten file is read again below and
+    // so that the repository holds only surviving images when the cap
+    // is applied.
+
+    using Candidate = std::pair<Fmi::DateTime, std::filesystem::path>;
+    std::vector<Candidate> candidates;
 
     for (const auto& [path, change] : *theStatus)
     {
@@ -198,18 +210,61 @@ void Scanner::update(Fmi::DirectoryMonitor::Watcher theWatcher,
         if (time.is_not_a_date_time())
           continue;  // Not a satellite product file name
 
-        try
-        {
-          auto info = std::make_shared<ImageInfo>(Gdal::readMetadata(path.string(), time));
-          itsRepository.insert(key, info);
-        }
-        catch (const std::exception& e)
-        {
-          // A single unreadable file must not stop the scan. Incomplete
-          // files appear in the directories while they are being written.
-          std::cerr << fmt::format(
-              "Warning: satellite engine skipped '{}': {}\n", path.string(), e.what());
-        }
+        candidates.emplace_back(time, path);
+      }
+    }
+
+    // Only the newest max_files images stay in the repository, so reading
+    // the metadata of the older ones would be work thrown away at once.
+    // The first scan is where this matters: the production directories
+    // hold weeks of history, and every file read is a GDAL open over NFS.
+    // The cutoff is the max_files'th newest time of the images already
+    // known and the candidates together, which is exactly the set the
+    // repository would keep.
+
+    if (max_files > 0)
+    {
+      auto times = itsRepository.times(key);
+      times.reserve(times.size() + candidates.size());
+      for (const auto& candidate : candidates)
+        times.push_back(candidate.first);
+
+      if (times.size() > max_files)
+      {
+        std::nth_element(
+            times.begin(), times.begin() + (max_files - 1), times.end(), std::greater<>());
+        const auto cutoff = times[max_files - 1];
+
+        candidates.erase(std::remove_if(candidates.begin(),
+                                        candidates.end(),
+                                        [&cutoff](const Candidate& candidate)
+                                        { return candidate.first < cutoff; }),
+                         candidates.end());
+      }
+    }
+
+    // Newest first, so that the latest image is available as early as
+    // possible while a long first scan is still going on.
+
+    std::sort(candidates.begin(), candidates.end(), std::greater<>());
+
+    for (const auto& [time, path] : candidates)
+    {
+      if (itsShutdownRequested)
+        return;
+
+      try
+      {
+        ++itsImagesRead;
+        auto info = std::make_shared<ImageInfo>(Gdal::readMetadata(path.string(), time));
+        itsRepository.insert(key, info);
+      }
+      catch (const std::exception& e)
+      {
+        // A single unreadable file must not stop the scan. Incomplete
+        // files appear in the directories while they are being written.
+        std::cerr << fmt::format(
+            "Warning: satellite engine skipped '{}': {}\n", path.string(), e.what());
       }
     }
   }

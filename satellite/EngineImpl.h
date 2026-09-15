@@ -47,6 +47,8 @@ class EngineImpl : public Engine
   std::size_t imageCount(const std::string& theProducer,
                          const std::string& theParameter) const override;
 
+  std::size_t imagesRead() const override;
+
   ImageInfoPtr find(const std::string& theProducer,
                     const std::string& theParameter,
                     const std::optional<Fmi::DateTime>& theTime,

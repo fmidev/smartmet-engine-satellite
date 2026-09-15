@@ -9,6 +9,7 @@
 #include <macgyver/Exception.h>
 #include <macgyver/Hash.h>
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cpl_conv.h>
 #include <cpl_error.h>
@@ -21,6 +22,7 @@
 #include <memory>
 #include <mutex>
 #include <ogr_spatialref.h>
+#include <optional>
 
 namespace SmartMet
 {
@@ -554,6 +556,62 @@ void initialize()
 
 // ----------------------------------------------------------------------
 /*!
+ * \brief GDAL configuration for opening one of our images
+ *
+ * Opening a file makes GDAL look for sidecar files next to it, such as
+ * .aux.xml metadata and .ovr overviews, and to find them it lists the
+ * directory. The production directories hold tens of thousands of files
+ * on NFS, so the listing costs more than the open itself, and the images
+ * carry everything they need: the CRS is embedded and the overviews are
+ * internal. The options are set for the current thread only and restored
+ * on destruction, because the request threads are shared with other
+ * users of GDAL which may rely on their sidecar files. An environment
+ * or global setting of the same option wins over these defaults.
+ */
+// ----------------------------------------------------------------------
+
+class OpenOptionsGuard
+{
+ public:
+  OpenOptionsGuard()
+  {
+    for (auto& option : itsOptions)
+    {
+      const char* previous = CPLGetThreadLocalConfigOption(option.name, nullptr);
+      if (previous != nullptr)
+        option.previous = previous;
+
+      if (CPLGetConfigOption(option.name, nullptr) == nullptr)
+        CPLSetThreadLocalConfigOption(option.name, option.value);
+    }
+  }
+
+  ~OpenOptionsGuard()
+  {
+    for (const auto& option : itsOptions)
+      CPLSetThreadLocalConfigOption(option.name,
+                                    option.previous ? option.previous->c_str() : nullptr);
+  }
+
+  OpenOptionsGuard(const OpenOptionsGuard&) = delete;
+  OpenOptionsGuard& operator=(const OpenOptionsGuard&) = delete;
+  OpenOptionsGuard(OpenOptionsGuard&&) = delete;
+  OpenOptionsGuard& operator=(OpenOptionsGuard&&) = delete;
+
+ private:
+  struct Option
+  {
+    const char* name;
+    const char* value;
+    std::optional<std::string> previous;
+  };
+
+  std::array<Option, 2> itsOptions{
+      {{"GDAL_DISABLE_READDIR_ON_OPEN", "EMPTY_DIR", {}}, {"GDAL_PAM_ENABLED", "NO", {}}}};
+};
+
+// ----------------------------------------------------------------------
+/*!
  * \brief Read the metadata of an image
  */
 // ----------------------------------------------------------------------
@@ -563,6 +621,7 @@ ImageInfo readMetadata(const std::string& thePath, const Fmi::DateTime& theTime)
   try
   {
     initialize();
+    OpenOptionsGuard open_options;
 
     DatasetPtr ds(
         GDALOpenEx(thePath.c_str(), GDAL_OF_RASTER | GDAL_OF_READONLY, nullptr, nullptr, nullptr));
@@ -624,6 +683,7 @@ Image warp(const ImageInfo& theImage, const WarpOptions& theOptions)
   try
   {
     initialize();
+    OpenOptionsGuard open_options;
 
     if (theOptions.width <= 0 || theOptions.height <= 0)
       throw Fmi::Exception(BCP, "The requested image size must be positive");
@@ -737,6 +797,7 @@ ValueImage warpValues(const ImageInfo& theImage, const WarpOptions& theOptions)
   try
   {
     initialize();
+    OpenOptionsGuard open_options;
 
     if (theOptions.width <= 0 || theOptions.height <= 0)
       throw Fmi::Exception(BCP, "The requested image size must be positive");

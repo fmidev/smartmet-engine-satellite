@@ -143,6 +143,13 @@ Image EngineImpl::warp(const ImageInfo& theImage, const WarpOptions& theOptions)
 
 // ----------------------------------------------------------------------
 
+std::size_t EngineImpl::imagesRead() const
+{
+  return itsScanner ? itsScanner->imagesRead() : 0;
+}
+
+// ----------------------------------------------------------------------
+
 ValueImage EngineImpl::warpValues(const ImageInfo& theImage, const WarpOptions& theOptions) const
 {
   return Gdal::warpValues(theImage, theOptions);

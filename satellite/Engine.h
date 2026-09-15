@@ -104,6 +104,10 @@ class Engine : public SmartMet::Spine::SmartMetEngine
     unavailable(BCP);
   }
 
+  // Number of image files whose metadata has been read since startup,
+  // for monitoring the cost of the directory scans
+  virtual std::size_t imagesRead() const { unavailable(BCP); }
+
   // Find the image closest to the requested time, or the newest image if
   // no time is requested. Returns nullptr if the product is unknown or
   // no image is within the tolerance.

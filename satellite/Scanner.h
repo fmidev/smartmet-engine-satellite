@@ -43,6 +43,12 @@ class Scanner
 
   bool ready() const;
 
+  // Number of image files whose metadata the scanner has tried to read
+  // since it was started. Files beyond max_files are never read, which
+  // is what keeps the first scan of a directory holding weeks of history
+  // short, and this counter is how the tests verify it.
+  std::size_t imagesRead() const { return itsImagesRead; }
+
   // Parse the valid time from a file name of the form
   // YYYYMMDD_HHMM_Platform_area_composite.tif. Returns NOT_A_DATE_TIME
   // if the name does not begin with a timestamp.
@@ -66,9 +72,15 @@ class Scanner
 
   // Watcher identity to the product it belongs to. Written before the
   // monitor is started, read only afterwards.
-  std::map<Fmi::DirectoryMonitor::Watcher, ProductKey> itsWatchers;
+  struct Watched
+  {
+    ProductKey key;
+    std::size_t max_files;
+  };
+  std::map<Fmi::DirectoryMonitor::Watcher, Watched> itsWatchers;
 
   std::atomic<bool> itsShutdownRequested{false};
+  std::atomic<std::size_t> itsImagesRead{0};
 };
 
 }  // namespace Satellite

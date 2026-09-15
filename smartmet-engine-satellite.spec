@@ -3,7 +3,7 @@
 %define SPECNAME smartmet-engine-%{DIRNAME}
 Summary: SmartMet satellite engine
 Name: %{SPECNAME}
-Version: 26.9.1
+Version: 26.9.15
 Release: 1%{?dist}.fmi
 License: MIT
 Group: SmartMet/Engines
@@ -85,6 +85,10 @@ rm -rf $RPM_BUILD_ROOT
 %{_includedir}/smartmet/engines/%{DIRNAME}/*.h
 
 %changelog
+* Tue Sep 15 2026 Mika Heiskanen <mika.heiskanen@fmi.fi> 26.9.15-1.fmi
+- Read the metadata of the newest max_files images only, the rest were read and discarded
+- Open images without listing the directory for sidecar files, which dominated the cost on NFS
+- Engine::imagesRead() counts the files opened by the scanner
 * Tue Sep  1 2026 Andris Pavenis <andris.pavenis@fmi.fi> 26.9.1-1.fmi
 - Engine.h now holds the API only and the work moved to EngineImpl
 - Added support for disabling the engine with 'disabled = true;'
