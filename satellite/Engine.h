@@ -108,6 +108,10 @@ class Engine : public SmartMet::Spine::SmartMetEngine
   // for monitoring the cost of the directory scans
   virtual std::size_t imagesRead() const { unavailable(BCP); }
 
+  // Number of directory listings made since startup. A quiet directory
+  // costs one stat per scan interval and no listing.
+  virtual std::size_t directoryListings() const { unavailable(BCP); }
+
   // Find the image closest to the requested time, or the newest image if
   // no time is requested. Returns nullptr if the product is unknown or
   // no image is within the tolerance.

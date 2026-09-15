@@ -11,11 +11,11 @@
 #include <macgyver/StringConversion.h>
 #include <macgyver/ThreadName.h>
 #include <macgyver/TimeParser.h>
+#include <sys/stat.h>
 #include <algorithm>
 #include <functional>
 #include <iostream>
-#include <utility>
-#include <vector>
+#include <set>
 
 namespace SmartMet
 {
@@ -23,6 +23,23 @@ namespace Engine
 {
 namespace Satellite
 {
+namespace
+{
+// Modification time of a directory in seconds, -1 if it cannot be read
+std::time_t directory_time(const std::filesystem::path& thePath)
+{
+  struct stat status;
+  if (::stat(thePath.c_str(), &status) != 0 || !S_ISDIR(status.st_mode))
+    return -1;
+  return status.st_mtime;
+}
+
+// Threads used for the first scan, which is where the time goes. The
+// directories are independent and the wait is for NFS, not the CPU.
+const std::size_t first_scan_threads = 8;
+
+}  // namespace
+
 // ----------------------------------------------------------------------
 
 Scanner::Scanner(Repository& theRepository) : itsRepository(theRepository) {}
@@ -79,7 +96,7 @@ Fmi::DateTime Scanner::parseTime(const std::string& theFileName)
 
 // ----------------------------------------------------------------------
 /*!
- * \brief Start watching the product directories
+ * \brief Scan the product directories once and start polling them
  */
 // ----------------------------------------------------------------------
 
@@ -87,61 +104,86 @@ void Scanner::start(const std::map<ProductKey, Product>& theProducts)
 {
   try
   {
+    // Group the products by directory
+
+    std::map<std::filesystem::path, Directory> directories;
+
     for (const auto& [key, product] : theProducts)
     {
-      if (!std::filesystem::is_directory(product.directory))
-      {
-        // A missing directory must not prevent the other products from
-        // working. The product will simply have no images.
-        std::cerr << fmt::format("Warning: satellite product '{}' directory '{}' does not exist\n",
-                                 product.id,
-                                 product.directory.string());
-        continue;
-      }
+      auto& directory = directories[product.directory];
+      directory.path = product.directory;
+      directory.watches.push_back(Watch{key, product.regex, product.max_files});
 
-      auto watcher = itsMonitor.watch(
-          product.directory,
-          product.regex,
-          [this](Fmi::DirectoryMonitor::Watcher id,
-                 const std::filesystem::path& path,
-                 const boost::regex& pattern,
-                 const Fmi::DirectoryMonitor::Status& status)
-          { this->update(id, path, pattern, status); },
-          [this](Fmi::DirectoryMonitor::Watcher id,
-                 const std::filesystem::path& path,
-                 const boost::regex& pattern,
-                 const std::string& message) { this->error(id, path, pattern, message); },
-          product.refresh_interval_secs,
-          // Asking for MODIFY is what makes this correct, and it is not
-          // about modified files. The monitor otherwise skips listing a
-          // directory whose own modification time has not advanced, and
-          // that time is shared by every composite in it: the composites
-          // of one instrument land in the same directory but not at the
-          // same moment, and the directory time has a one second
-          // resolution. Requesting MODIFY makes the monitor list the
-          // directory on every tick and compare the file times of the
-          // files matching this product only, so the products of one
-          // directory are noticed independently of each other. See the
-          // staggered_updates and modified_in_place tests.
-          Fmi::DirectoryMonitor::CREATE | Fmi::DirectoryMonitor::DELETE |
-              Fmi::DirectoryMonitor::MODIFY);
-
-      itsWatchers.insert({watcher, Watched{key, product.max_files}});
+      const std::chrono::seconds interval(std::max(1, product.refresh_interval_secs));
+      if (directory.interval.count() == 0 || interval < directory.interval)
+        directory.interval = interval;
     }
 
-    if (itsWatchers.empty())
-      return;
+    for (auto& [path, directory] : directories)
+    {
+      // A missing directory must not prevent the other products from
+      // working, and the production has moved directories from one
+      // machine to another before, so it is polled like the others and
+      // picked up if it appears.
+      if (!std::filesystem::is_directory(path))
+        std::cerr << fmt::format(
+            "Warning: satellite directory '{}' does not exist, its {} product(s) will be empty "
+            "until it appears\n",
+            path.string(),
+            directory.watches.size());
 
-    itsMonitorThread = boost::thread(
+      itsDirectories.push_back(std::move(directory));
+    }
+
+    if (itsDirectories.empty())
+    {
+      itsReady = true;
+      return;
+    }
+
+    // The first scan, directories in parallel. The engine must not
+    // report itself ready before it is complete, otherwise the first
+    // requests would find no images.
+
+    const auto started = std::chrono::steady_clock::now();
+    {
+      std::atomic<std::size_t> next{0};
+      std::vector<std::thread> workers;
+      const auto count = std::min(itsDirectories.size(), first_scan_threads);
+      for (std::size_t i = 0; i < count; i++)
+      {
+        workers.emplace_back(
+            [this, &next]()
+            {
+              Fmi::set_thread_name("sat-scan");
+              for (;;)
+              {
+                const auto index = next++;
+                if (index >= itsDirectories.size() || itsShutdownRequested)
+                  return;
+                scan(itsDirectories[index]);
+              }
+            });
+      }
+      for (auto& worker : workers)
+        worker.join();
+    }
+
+    const auto elapsed = std::chrono::duration<double>(std::chrono::steady_clock::now() - started);
+    std::cout << fmt::format(
+        "Satellite engine: first scan of {} directories read {} images in {:.1f} seconds\n",
+        itsDirectories.size(),
+        itsImagesRead.load(),
+        elapsed.count());
+
+    itsReady = true;
+
+    itsThread = std::thread(
         [this]()
         {
           Fmi::set_thread_name("sat-monitor");
-          itsMonitor.run();
+          run();
         });
-
-    // The engine must not report itself ready before the first scan is
-    // complete, otherwise the first requests would find no images
-    itsMonitor.wait_until_ready();
   }
   catch (...)
   {
@@ -153,138 +195,251 @@ void Scanner::start(const std::map<ProductKey, Product>& theProducts)
 
 void Scanner::stop()
 {
-  itsShutdownRequested = true;
-
-  if (itsMonitorThread.joinable())
   {
-    itsMonitor.stop();
-    itsMonitorThread.join();
+    std::lock_guard<std::mutex> lock(itsMutex);
+    itsShutdownRequested = true;
   }
-}
+  itsCondition.notify_all();
 
-// ----------------------------------------------------------------------
-
-bool Scanner::ready() const
-{
-  return itsWatchers.empty() || itsMonitor.ready();
+  if (itsThread.joinable())
+    itsThread.join();
 }
 
 // ----------------------------------------------------------------------
 /*!
- * \brief Handle the changes of one directory
+ * \brief Poll the directories until asked to stop
  */
 // ----------------------------------------------------------------------
 
-void Scanner::update(Fmi::DirectoryMonitor::Watcher theWatcher,
-                     const std::filesystem::path& thePath,
-                     const boost::regex& /* thePattern */,
-                     const Fmi::DirectoryMonitor::Status& theStatus)
+void Scanner::run()
+{
+  std::unique_lock<std::mutex> lock(itsMutex);
+
+  while (!itsShutdownRequested)
+  {
+    lock.unlock();
+
+    const auto now = std::chrono::steady_clock::now();
+    auto wake = now + std::chrono::seconds(60);
+
+    for (auto& directory : itsDirectories)
+    {
+      if (itsShutdownRequested)
+        break;
+      if (now >= directory.next_scan)
+        scan(directory);
+      wake = std::min(wake, directory.next_scan);
+    }
+
+    lock.lock();
+    itsCondition.wait_until(lock, wake, [this]() { return itsShutdownRequested.load(); });
+  }
+}
+
+// ----------------------------------------------------------------------
+/*!
+ * \brief One tick of one directory: a stat, and a listing if needed
+ */
+// ----------------------------------------------------------------------
+
+void Scanner::scan(Directory& theDirectory)
 {
   try
   {
-    auto pos = itsWatchers.find(theWatcher);
-    if (pos == itsWatchers.end())
+    theDirectory.next_scan = std::chrono::steady_clock::now() + theDirectory.interval;
+
+    const auto mtime = directory_time(theDirectory.path);
+
+    if (mtime < 0)
+    {
+      // Missing or unreadable. Its images are gone, and it is tried
+      // again at the next tick.
+      forget(theDirectory);
       return;
-
-    const auto& key = pos->second.key;
-    const auto max_files = pos->second.max_files;
-
-    // Removals first, so that a rewritten file is read again below and
-    // so that the repository holds only surviving images when the cap
-    // is applied.
-
-    using Candidate = std::pair<Fmi::DateTime, std::filesystem::path>;
-    std::vector<Candidate> candidates;
-
-    for (const auto& [path, change] : *theStatus)
-    {
-      if (itsShutdownRequested)
-        return;
-
-      if ((change & (Fmi::DirectoryMonitor::DELETE | Fmi::DirectoryMonitor::MODIFY)) != 0)
-        itsRepository.remove(key, path.string());
-
-      if ((change & (Fmi::DirectoryMonitor::CREATE | Fmi::DirectoryMonitor::MODIFY)) != 0)
-      {
-        const auto time = parseTime(path.filename().string());
-        if (time.is_not_a_date_time())
-          continue;  // Not a satellite product file name
-
-        candidates.emplace_back(time, path);
-      }
     }
 
-    // Only the newest max_files images stay in the repository, so reading
-    // the metadata of the older ones would be work thrown away at once.
-    // The first scan is where this matters: the production directories
-    // hold weeks of history, and every file read is a GDAL open over NFS.
-    // The cutoff is the max_files'th newest time of the images already
-    // known and the candidates together, which is exactly the set the
-    // repository would keep.
+    if (mtime == theDirectory.mtime && theDirectory.settled)
+      return;  // Nothing has arrived or left
 
-    if (max_files > 0)
-    {
-      auto times = itsRepository.times(key);
-      times.reserve(times.size() + candidates.size());
-      for (const auto& candidate : candidates)
-        times.push_back(candidate.first);
-
-      if (times.size() > max_files)
-      {
-        std::nth_element(
-            times.begin(), times.begin() + (max_files - 1), times.end(), std::greater<>());
-        const auto cutoff = times[max_files - 1];
-
-        candidates.erase(std::remove_if(candidates.begin(),
-                                        candidates.end(),
-                                        [&cutoff](const Candidate& candidate)
-                                        { return candidate.first < cutoff; }),
-                         candidates.end());
-      }
-    }
-
-    // Newest first, so that the latest image is available as early as
-    // possible while a long first scan is still going on.
-
-    std::sort(candidates.begin(), candidates.end(), std::greater<>());
-
-    for (const auto& [time, path] : candidates)
-    {
-      if (itsShutdownRequested)
-        return;
-
-      try
-      {
-        ++itsImagesRead;
-        auto info = std::make_shared<ImageInfo>(Gdal::readMetadata(path.string(), time));
-        itsRepository.insert(key, info);
-      }
-      catch (const std::exception& e)
-      {
-        // A single unreadable file must not stop the scan. Incomplete
-        // files appear in the directories while they are being written.
-        std::cerr << fmt::format(
-            "Warning: satellite engine skipped '{}': {}\n", path.string(), e.what());
-      }
-    }
+    list(theDirectory, mtime);
   }
   catch (...)
   {
     Fmi::Exception exception(BCP, "Satellite directory scan failed");
-    exception.addParameter("Directory", thePath.string());
+    exception.addParameter("Directory", theDirectory.path.string());
     exception.printError();
   }
 }
 
 // ----------------------------------------------------------------------
+/*!
+ * \brief List a directory and act on what has changed
+ *
+ * Only the file names are read. Each new name is matched against the
+ * patterns of the products sharing the directory, known names keep the
+ * matches of the previous listing.
+ */
+// ----------------------------------------------------------------------
 
-void Scanner::error(Fmi::DirectoryMonitor::Watcher /* theWatcher */,
-                    const std::filesystem::path& thePath,
-                    const boost::regex& /* thePattern */,
-                    const std::string& theMessage)
+void Scanner::list(Directory& theDirectory, std::time_t theTime)
 {
-  std::cerr << fmt::format(
-      "Warning: satellite engine failed to scan '{}': {}\n", thePath.string(), theMessage);
+  ++itsListings;
+  const std::time_t listed_at = std::time(nullptr);
+
+  std::map<std::string, std::vector<std::size_t>> names;
+  std::vector<std::vector<Candidate>> candidates(theDirectory.watches.size());
+
+  std::error_code error;
+  for (std::filesystem::directory_iterator it(theDirectory.path, error), end; it != end;
+       it.increment(error))
+  {
+    if (error)
+      break;
+
+    const auto name = it->path().filename().string();
+    if (name.empty() || name[0] == '.')
+      continue;
+
+    auto known = theDirectory.names.find(name);
+    if (known != theDirectory.names.end())
+    {
+      names.insert(*known);
+      continue;
+    }
+
+    // A new file. Not every name matches a configured product, one
+    // directory may hold composites nobody has asked for.
+
+    std::vector<std::size_t> matches;
+    for (std::size_t i = 0; i < theDirectory.watches.size(); i++)
+      if (boost::regex_match(name, theDirectory.watches[i].regex))
+        matches.push_back(i);
+
+    if (matches.empty())
+      continue;
+
+    const auto time = parseTime(name);
+    if (time.is_not_a_date_time())
+      continue;  // Not a satellite product file name
+
+    for (auto i : matches)
+      candidates[i].emplace_back(time, it->path());
+
+    names.emplace(name, std::move(matches));
+  }
+
+  // Deleted files
+
+  for (const auto& [name, matches] : theDirectory.names)
+  {
+    if (names.count(name) > 0)
+      continue;
+    const auto path = (theDirectory.path / name).string();
+    for (auto i : matches)
+      itsRepository.remove(theDirectory.watches[i].key, path);
+  }
+
+  // New files, per product
+
+  for (std::size_t i = 0; i < theDirectory.watches.size(); i++)
+  {
+    if (itsShutdownRequested)
+      return;
+    if (!candidates[i].empty())
+      read(theDirectory.watches[i], std::move(candidates[i]));
+  }
+
+  theDirectory.names = std::move(names);
+  theDirectory.mtime = theTime;
+
+  // The file times have a one second resolution, hence a file may still
+  // arrive within the same second without changing the directory time
+  theDirectory.settled = (listed_at - theTime >= 2);
+}
+
+// ----------------------------------------------------------------------
+/*!
+ * \brief Forget the images of a directory which has disappeared
+ */
+// ----------------------------------------------------------------------
+
+void Scanner::forget(Directory& theDirectory)
+{
+  for (const auto& [name, matches] : theDirectory.names)
+  {
+    const auto path = (theDirectory.path / name).string();
+    for (auto i : matches)
+      itsRepository.remove(theDirectory.watches[i].key, path);
+  }
+
+  theDirectory.names.clear();
+  theDirectory.mtime = -1;
+  theDirectory.settled = false;
+}
+
+// ----------------------------------------------------------------------
+/*!
+ * \brief Read the metadata of the new images of one product
+ *
+ * Only the newest max_files images stay in the repository, so reading
+ * the metadata of the older ones would be work thrown away at once. The
+ * first scan is where this matters: the production directories hold
+ * weeks of history, and every file read is a GDAL open over NFS. The
+ * cutoff is the max_files'th newest time of the images already known
+ * and the candidates together, which is exactly the set the repository
+ * would keep.
+ */
+// ----------------------------------------------------------------------
+
+void Scanner::read(const Watch& theWatch, std::vector<Candidate> theCandidates)
+{
+  const auto max_files = theWatch.max_files;
+
+  if (max_files > 0)
+  {
+    auto times = itsRepository.times(theWatch.key);
+    times.reserve(times.size() + theCandidates.size());
+    for (const auto& candidate : theCandidates)
+      times.push_back(candidate.first);
+
+    if (times.size() > max_files)
+    {
+      std::nth_element(
+          times.begin(), times.begin() + (max_files - 1), times.end(), std::greater<>());
+      const auto cutoff = times[max_files - 1];
+
+      theCandidates.erase(std::remove_if(theCandidates.begin(),
+                                         theCandidates.end(),
+                                         [&cutoff](const Candidate& candidate)
+                                         { return candidate.first < cutoff; }),
+                          theCandidates.end());
+    }
+  }
+
+  // Newest first, so that the latest image is available as early as
+  // possible while a long first scan is still going on
+
+  std::sort(theCandidates.begin(), theCandidates.end(), std::greater<>());
+
+  for (const auto& [time, path] : theCandidates)
+  {
+    if (itsShutdownRequested)
+      return;
+
+    try
+    {
+      ++itsImagesRead;
+      auto info = std::make_shared<ImageInfo>(Gdal::readMetadata(path.string(), time));
+      itsRepository.insert(theWatch.key, info);
+    }
+    catch (const std::exception& e)
+    {
+      // A single unreadable file must not stop the scan. Incomplete
+      // files appear in the directories while they are being written.
+      std::cerr << fmt::format(
+          "Warning: satellite engine skipped '{}': {}\n", path.string(), e.what());
+    }
+  }
 }
 
 }  // namespace Satellite

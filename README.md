@@ -210,21 +210,45 @@ See `docs/poc-benchmarks.md` for measurements.
 
 ## Scanning
 
-Each product is watched separately, with its own file name pattern and
-its own scan interval, and the monitor compares the modification times of
-the files matching that pattern only. Composites therefore do not
-interfere with each other even though they share a directory: one
-composite standing still cannot delay another, and an arriving image is
-credited to the product whose pattern matches it and to no other.
+The products are grouped by directory, and each directory is polled the
+way the querydata engine polls its directories: at every tick the
+scanner stats the directory, and lists it only when the modification
+time has changed. A quiet directory therefore costs one stat per
+interval, however many composites it holds. The interval of a directory
+is the shortest `refresh_interval_secs` of its products.
+
+This rests on the assumption that files arrive and get deleted but are
+never rewritten in place, since rewriting a file does not change the
+directory time. The satellite production writes its images under a
+temporary name and renames them into place, which is a directory change.
+Note also that the directory time has a one second resolution, hence a
+file arriving within the same second as a listing would go unnoticed
+until the next change. The scanner handles this by listing a directory
+again at the next tick unless the listing happened at least two seconds
+after the directory time. On NFS the client caches directory attributes
+for up to a minute by default (`acdirmax`), which bounds how soon a new
+image can be noticed regardless of the scan interval.
+
+A listing reads the file names only, no file is stat'ed or opened. New
+names are matched against the patterns of the products sharing the
+directory, and names seen before keep their matches from the previous
+listing, so the regular expressions run once per file. Deleted names
+are removed from the repository. A directory which does not exist is a
+warning at startup, not a failure: it is polled like the others and
+picked up when it appears, and the images of a directory which
+disappears are forgotten. The production has moved directories between
+machines before, so this case is real.
 
 Only the newest `max_files` images of a product are kept, and only they
-are read. The scanner works out from the file names which of the files
-a scan reports would survive the cap and reads the metadata of those
-only, newest first. This is what keeps the first scan short: the
-production directories hold weeks of history, up to some 1,300 files per
-composite, and reading the metadata of a file is a GDAL open over NFS.
-Set `max_files` to what the time dimension of the layer needs, not to
-what the directory happens to hold.
+are read. The scanner works out from the file names which of the new
+files would survive the cap and reads the metadata of those only,
+newest first. This is what keeps the first scan short: the production
+directories hold weeks of history, up to some 1,300 files per composite,
+and reading the metadata of a file is a GDAL open over NFS. The first
+scan runs the directories in parallel, eight at a time, and prints how
+many images it read and how long it took. Set `max_files` to what the
+time dimension of the layer needs, not to what the directory happens to
+hold.
 
 Opening a file makes GDAL look for sidecar files next to it, such as
 `.aux.xml` metadata and `.ovr` overviews, and to find them it lists the
@@ -237,14 +261,11 @@ the call only, so other users of GDAL sharing the request threads keep
 their sidecar files, and a setting of the same option in the environment
 wins over the engine's default.
 
-The one subtlety is that the monitor is asked for MODIFY events even
-though the production system never rewrites an image. Without that
-request the monitor skips listing a directory whose own modification time
-has not advanced, and that time is shared by all the composites of the
-directory and has a one second resolution, so a change could be missed
-until something else happened in the same directory. The cost of asking
-for MODIFY is that a directory is listed once per product per interval
-rather than once per interval.
+The scanner is deliberately self contained rather than built on the
+macgyver `DirectoryMonitor`, which stats every matching file at every
+listing and would need a names-only mode for directories of this size.
+Whether the monitor could serve is worth revisiting once the engine has
+run in production for a while.
 
 ## Thread safety
 

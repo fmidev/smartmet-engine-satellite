@@ -42,6 +42,7 @@ const ProductKey series_product = {"meteosat", "fog_rgb"};
 const ProductKey livescan_product = {"testsat", "livescan"};
 const ProductKey livescan_other_product = {"testsat", "livescan_other"};
 const ProductKey capped_product = {"testsat", "capped"};
+const ProductKey late_product = {"testsat", "late"};
 
 // These two share a directory and one name is a prefix of the other
 const ProductKey shared_dir_a = {"metop", "ir108"};
@@ -164,7 +165,8 @@ void menu_parameters()
 
   // Two products may share a directory
   auto testsat = satellite->parameters("testsat");
-  const std::vector<std::string> testsat_expected = {"capped", "livescan", "livescan_other"};
+  const std::vector<std::string> testsat_expected = {
+      "capped", "late", "livescan", "livescan_other"};
   if (testsat != testsat_expected)
     TEST_FAILED("Expected the testsat parameters " + boost::algorithm::join(testsat_expected, ",") +
                 ", got " + boost::algorithm::join(testsat, ","));
@@ -1194,40 +1196,60 @@ void staggered_updates()
 
 // ----------------------------------------------------------------------
 /*!
- * \brief A file rewritten in place must be noticed
+ * \brief A quiet directory is not listed
  *
- * The modification time of a directory changes when a file is created,
- * deleted or renamed in it, but not when an existing file is rewritten.
- * The directory monitor can use the directory time to skip scanning, and
- * a scanner relying on that would serve the old pixels of a rewritten
- * file forever, since the image hash which the WMS ETag is built from
- * would never change either. Asking for MODIFY events disables that
- * shortcut, which is why the scanner does so.
- *
- * Note that the file times have a one second resolution, hence the test
- * has to wait before rewriting. In production this case does not arise
- * from a rewrite at all: the images are written under a temporary name
- * and renamed, which the monitor sees as a new file.
+ * The scanner checks the modification time of the directory at every
+ * tick and lists the directory only when the time has changed, the way
+ * the querydata engine does. The scan directory has a one second
+ * interval, so a few quiet seconds must pass without a single listing.
+ * A directory settles two seconds after its last change, hence the
+ * wait before counting.
  */
 // ----------------------------------------------------------------------
 
-void modified_in_place()
+void quiet_directory()
+{
+  std::this_thread::sleep_for(std::chrono::milliseconds(4000));
+
+  const auto before = satellite->directoryListings();
+  std::this_thread::sleep_for(std::chrono::milliseconds(3500));
+  const auto after = satellite->directoryListings();
+
+  if (after != before)
+    TEST_FAILED(
+        fmt::format("The directories were listed {} times while nothing changed", after - before));
+
+  TEST_PASSED();
+}
+
+// ----------------------------------------------------------------------
+/*!
+ * \brief A directory missing at startup is picked up when it appears
+ *
+ * The production has moved directories from one machine to another,
+ * hence a product whose directory does not exist is a warning at
+ * startup, not a failure, and the directory is polled like the others.
+ * When it disappears again its images must be forgotten.
+ */
+// ----------------------------------------------------------------------
+
+void late_directory()
 {
   const char* dir = getenv("SATELLITE_SCAN_DIR");
   if (dir == nullptr)
     TEST_FAILED("SATELLITE_SCAN_DIR is not set");
 
-  auto times = times_of(series_product);
-  if (times.size() < 2)
-    TEST_FAILED("Need two source images for '" + name_of(series_product) + "'");
+  const std::filesystem::path late = std::filesystem::path(dir) / "late";
 
-  auto first_source = find_image(series_product, times.front(), Fmi::TimeDuration(0, 0, 0));
-  auto second_source = find_image(series_product, times.back(), Fmi::TimeDuration(0, 0, 0));
+  const auto count = [&]()
+  { return satellite->imageCount(late_product.first, late_product.second); };
 
-  const std::filesystem::path target =
-      std::filesystem::path(dir) / "20230929_2100_Meteosat-10_fog_rgb_ir.tif";
+  if (count() != 0)
+    TEST_FAILED("The late product had images before its directory existed");
 
-  const auto cleanup = [&]() { std::filesystem::remove(target); };
+  auto source = find_image(series_product, {}, Fmi::TimeDuration(0, 0, 0));
+  if (!source)
+    TEST_FAILED("No image available for '" + name_of(series_product) + "'");
 
   const auto wait_for = [](const std::function<bool()>& condition)
   {
@@ -1240,63 +1262,21 @@ void modified_in_place()
     return false;
   };
 
-  const auto fail = [&](const std::string& message)
+  std::filesystem::create_directories(late);
+  std::filesystem::copy_file(source->path,
+                             late / "20230929_2100_Meteosat-10_late.tif",
+                             std::filesystem::copy_options::overwrite_existing);
+
+  if (!wait_for([&]() { return count() == 1; }))
   {
-    cleanup();
-    TEST_FAILED(message);
-  };
+    std::filesystem::remove_all(late);
+    TEST_FAILED("The image in the late directory was not noticed within 20 seconds");
+  }
 
-  // Copy the contents of a file over another, keeping the same inode so
-  // that the directory itself is not touched
-  const auto overwrite = [](const std::filesystem::path& from, const std::filesystem::path& to)
-  {
-    std::ifstream in(from, std::ios::binary);
-    std::ofstream out(to, std::ios::binary | std::ios::trunc);
-    out << in.rdbuf();
-  };
+  std::filesystem::remove_all(late);
 
-  std::filesystem::copy_file(
-      first_source->path, target, std::filesystem::copy_options::overwrite_existing);
-
-  if (!wait_for(
-          [&]()
-          { return satellite->imageCount(livescan_product.first, livescan_product.second) == 1; }))
-    fail("The new file was not noticed");
-
-  auto before = find_image(livescan_product, {}, Fmi::TimeDuration(0, 0, 0));
-  if (!before)
-    fail("The new file was counted but cannot be found");
-  const auto hash_before = before->hash;
-
-  const auto dirtime_before = std::filesystem::last_write_time(dir);
-
-  // The file times have a one second resolution
-  std::this_thread::sleep_for(std::chrono::milliseconds(2000));
-
-  overwrite(second_source->path, target);
-
-  // The point of the test: the directory did not change
-  if (std::filesystem::last_write_time(dir) != dirtime_before)
-    fail("The test rewrote the file in a way which changed the directory");
-
-  if (!wait_for(
-          [&]()
-          {
-            auto now = find_image(livescan_product, {}, Fmi::TimeDuration(0, 0, 0));
-            return now && now->hash != hash_before;
-          }))
-    fail("The rewritten file was not noticed, so a stale image would be served");
-
-  // And there must still be exactly one image, not two
-  if (satellite->imageCount(livescan_product.first, livescan_product.second) != 1)
-    fail("The rewritten file was added instead of replaced");
-
-  cleanup();
-
-  if (!wait_for(
-          [&]()
-          { return satellite->imageCount(livescan_product.first, livescan_product.second) == 0; }))
-    TEST_FAILED("The deleted file was not forgotten");
+  if (!wait_for([&]() { return count() == 0; }))
+    TEST_FAILED("The images of a removed directory were not forgotten within 20 seconds");
 
   TEST_PASSED();
 }
@@ -1330,7 +1310,8 @@ class tests : public tframe::tests
     TEST(live_scan);
     TEST(max_files_cap);
     TEST(staggered_updates);
-    TEST(modified_in_place);
+    TEST(quiet_directory);
+    TEST(late_directory);
     TEST(warp_speed);
   }
 

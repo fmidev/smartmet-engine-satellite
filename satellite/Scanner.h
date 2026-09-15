@@ -2,9 +2,19 @@
 /*!
  * \brief Directory scanner keeping the image catalog up to date
  *
- * One directory monitor watches all configured product directories.
- * New files are read for their metadata and inserted into the
- * repository, deleted files are removed from it.
+ * The products are grouped by directory and each directory is polled
+ * the way the querydata engine polls its directories: the modification
+ * time of the directory is checked at every tick, and the directory is
+ * listed only when the time has changed. The assumption behind this is
+ * that files arrive and get deleted but are never rewritten in place,
+ * which holds for the satellite production: images are written under a
+ * temporary name and renamed into place.
+ *
+ * A listing reads the file names only, no file is touched. The names
+ * are compared with those of the previous listing, new files are
+ * credited to the products whose patterns match them, and the metadata
+ * of the ones which fit under max_files is read. Deleted files are
+ * removed from the repository.
  */
 // ======================================================================
 
@@ -12,11 +22,16 @@
 
 #include "Product.h"
 #include "Repository.h"
-#include <boost/thread.hpp>
-#include <macgyver/DirectoryMonitor.h>
 #include <atomic>
+#include <chrono>
+#include <condition_variable>
+#include <ctime>
 #include <map>
+#include <mutex>
 #include <string>
+#include <thread>
+#include <utility>
+#include <vector>
 
 namespace SmartMet
 {
@@ -35,13 +50,13 @@ class Scanner
   Scanner(Scanner&&) = delete;
   Scanner& operator=(Scanner&&) = delete;
 
-  // Start watching the directories of the given products. Returns when
-  // the first scan of every directory has completed.
+  // Scan the directories of the given products once and start polling
+  // them. Returns when the first scan of every directory has completed.
   void start(const std::map<ProductKey, Product>& theProducts);
 
   void stop();
 
-  bool ready() const;
+  bool ready() const { return itsReady; }
 
   // Number of image files whose metadata the scanner has tried to read
   // since it was started. Files beyond max_files are never read, which
@@ -49,38 +64,65 @@ class Scanner
   // short, and this counter is how the tests verify it.
   std::size_t imagesRead() const { return itsImagesRead; }
 
+  // Number of directory listings made since the start. A quiet directory
+  // costs one stat per tick and no listing.
+  std::size_t listings() const { return itsListings; }
+
   // Parse the valid time from a file name of the form
   // YYYYMMDD_HHMM_Platform_area_composite.tif. Returns NOT_A_DATE_TIME
   // if the name does not begin with a timestamp.
   static Fmi::DateTime parseTime(const std::string& theFileName);
 
  private:
-  void update(Fmi::DirectoryMonitor::Watcher theWatcher,
-              const std::filesystem::path& thePath,
-              const boost::regex& thePattern,
-              const Fmi::DirectoryMonitor::Status& theStatus);
-
-  void error(Fmi::DirectoryMonitor::Watcher theWatcher,
-             const std::filesystem::path& thePath,
-             const boost::regex& thePattern,
-             const std::string& theMessage);
-
-  Repository& itsRepository;
-
-  Fmi::DirectoryMonitor itsMonitor;
-  boost::thread itsMonitorThread;
-
-  // Watcher identity to the product it belongs to. Written before the
-  // monitor is started, read only afterwards.
-  struct Watched
+  // One product watching a directory
+  struct Watch
   {
     ProductKey key;
+    boost::regex regex;
     std::size_t max_files;
   };
-  std::map<Fmi::DirectoryMonitor::Watcher, Watched> itsWatchers;
+
+  // One directory and the products sharing it
+  struct Directory
+  {
+    std::filesystem::path path;
+    std::vector<Watch> watches;
+    std::chrono::seconds interval{0};  // The shortest interval of the products
+    std::chrono::steady_clock::time_point next_scan;
+
+    // The directory modification time when it was last listed, -1 if
+    // never, and whether that listing happened clearly after the last
+    // change. A file arriving within the same second as the listing
+    // leaves the directory time unchanged, hence an unsettled directory
+    // is listed again at the next tick regardless of its time.
+    std::time_t mtime{-1};
+    bool settled{false};
+
+    // The matching file names of the last listing and the indices of the
+    // watches each of them matched, so that a name is matched against
+    // the patterns once only
+    std::map<std::string, std::vector<std::size_t>> names;
+  };
+
+  using Candidate = std::pair<Fmi::DateTime, std::filesystem::path>;
+
+  void scan(Directory& theDirectory);
+  void list(Directory& theDirectory, std::time_t theTime);
+  void forget(Directory& theDirectory);
+  void read(const Watch& theWatch, std::vector<Candidate> theCandidates);
+  void run();
+
+  Repository& itsRepository;
+  std::vector<Directory> itsDirectories;
+
+  std::thread itsThread;
+  std::mutex itsMutex;
+  std::condition_variable itsCondition;
 
   std::atomic<bool> itsShutdownRequested{false};
+  std::atomic<bool> itsReady{false};
   std::atomic<std::size_t> itsImagesRead{0};
+  std::atomic<std::size_t> itsListings{0};
 };
 
 }  // namespace Satellite

@@ -150,6 +150,13 @@ std::size_t EngineImpl::imagesRead() const
 
 // ----------------------------------------------------------------------
 
+std::size_t EngineImpl::directoryListings() const
+{
+  return itsScanner ? itsScanner->listings() : 0;
+}
+
+// ----------------------------------------------------------------------
+
 ValueImage EngineImpl::warpValues(const ImageInfo& theImage, const WarpOptions& theOptions) const
 {
   return Gdal::warpValues(theImage, theOptions);

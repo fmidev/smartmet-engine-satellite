@@ -4,7 +4,7 @@
 Summary: SmartMet satellite engine
 Name: %{SPECNAME}
 Version: 26.9.15
-Release: 1%{?dist}.fmi
+Release: 2%{?dist}.fmi
 License: MIT
 Group: SmartMet/Engines
 URL: https://github.com/fmidev/smartmet-engine-satellite
@@ -85,6 +85,11 @@ rm -rf $RPM_BUILD_ROOT
 %{_includedir}/smartmet/engines/%{DIRNAME}/*.h
 
 %changelog
+* Tue Sep 15 2026 Mika Heiskanen <mika.heiskanen@fmi.fi> 26.9.15-2.fmi
+- Poll the directories by their modification time and list them only when it changes
+- List file names only, one listing per directory instead of one per product
+- A missing directory is polled and picked up when it appears
+- The first scan runs the directories in parallel and reports its duration
 * Tue Sep 15 2026 Mika Heiskanen <mika.heiskanen@fmi.fi> 26.9.15-1.fmi
 - Read the metadata of the newest max_files images only, the rest were read and discarded
 - Open images without listing the directory for sidecar files, which dominated the cost on NFS
