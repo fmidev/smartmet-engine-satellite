@@ -4,7 +4,7 @@
 Summary: SmartMet satellite engine
 Name: %{SPECNAME}
 Version: 26.9.15
-Release: 4%{?dist}.fmi
+Release: 5%{?dist}.fmi
 License: MIT
 Group: SmartMet/Engines
 URL: https://github.com/fmidev/smartmet-engine-satellite
@@ -85,6 +85,8 @@ rm -rf $RPM_BUILD_ROOT
 %{_includedir}/smartmet/engines/%{DIRNAME}/*.h
 
 %changelog
+* Tue Sep 15 2026 Mika Heiskanen <mika.heiskanen@fmi.fi> 26.9.15-5.fmi
+- The new statistics virtuals moved to the end of the API class so that the slots of find and warp are unchanged from 26.9.1
 * Tue Sep 15 2026 Mika Heiskanen <mika.heiskanen@fmi.fi> 26.9.15-4.fmi
 - Reuse the CRS of the newest image of the product when a file shares its grid, six times less CPU per file
 * Tue Sep 15 2026 Mika Heiskanen <mika.heiskanen@fmi.fi> 26.9.15-3.fmi
