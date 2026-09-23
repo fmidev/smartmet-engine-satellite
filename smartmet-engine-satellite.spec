@@ -3,8 +3,8 @@
 %define SPECNAME smartmet-engine-%{DIRNAME}
 Summary: SmartMet satellite engine
 Name: %{SPECNAME}
-Version: 26.9.15
-Release: 5%{?dist}.fmi
+Version: 26.9.23
+Release: 1%{?dist}.fmi
 License: MIT
 Group: SmartMet/Engines
 URL: https://github.com/fmidev/smartmet-engine-satellite
@@ -29,9 +29,9 @@ BuildRequires: rpm-build
 BuildRequires: gcc-c++
 BuildRequires: make
 BuildRequires: %{smartmet_boost}-devel
-BuildRequires: smartmet-library-spine-devel >= 26.8.24
-BuildRequires: smartmet-library-macgyver-devel >= 26.8.24
-BuildRequires: smartmet-utils-devel >= 26.7.14
+BuildRequires: smartmet-library-spine-devel >= 26.9.23
+BuildRequires: smartmet-library-macgyver-devel >= 26.9.23
+BuildRequires: smartmet-utils-devel >= 26.9.3
 BuildRequires: libconfig17-devel
 BuildRequires: %{smartmet_fmt_devel}
 BuildRequires: gdal312-devel
@@ -40,8 +40,8 @@ BuildRequires: gdal312-devel
 #TestRequires: smartmet-library-regression
 Requires: %{smartmet_boost}-thread
 Requires: %{smartmet_boost}-regex
-Requires: smartmet-library-spine >= 26.8.24
-Requires: smartmet-library-macgyver >= 26.8.24
+Requires: smartmet-library-spine >= 26.9.23
+Requires: smartmet-library-macgyver >= 26.9.23
 Requires: libconfig17
 Requires: %{smartmet_fmt}
 Requires: gdal312-libs
@@ -56,8 +56,8 @@ Summary: SmartMet %{SPECNAME} development headers
 Group: SmartMet/Development
 Provides: %{SPECNAME}-devel
 Requires: %{SPECNAME} = %{version}-%{release}
-Requires: smartmet-library-spine-devel >= 26.8.24
-Requires: smartmet-library-macgyver-devel >= 26.8.24
+Requires: smartmet-library-spine-devel >= 26.9.23
+Requires: smartmet-library-macgyver-devel >= 26.9.23
 Requires: %{smartmet_boost}-devel
 %description -n %{SPECNAME}-devel
 SmartMet %{SPECNAME} development headers.
@@ -85,6 +85,9 @@ rm -rf $RPM_BUILD_ROOT
 %{_includedir}/smartmet/engines/%{DIRNAME}/*.h
 
 %changelog
+* Wed Sep 23 2026 Mika Heiskanen <mika.heiskanen@fmi.fi> - 26.9.23-1.fmi
+- Repackaged due to base library ABI changes
+
 * Tue Sep 15 2026 Mika Heiskanen <mika.heiskanen@fmi.fi> 26.9.15-5.fmi
 - The new statistics virtuals moved to the end of the API class so that the slots of find and warp are unchanged from 26.9.1
 * Tue Sep 15 2026 Mika Heiskanen <mika.heiskanen@fmi.fi> 26.9.15-4.fmi
