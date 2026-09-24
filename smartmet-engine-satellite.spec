@@ -3,7 +3,7 @@
 %define SPECNAME smartmet-engine-%{DIRNAME}
 Summary: SmartMet satellite engine
 Name: %{SPECNAME}
-Version: 26.9.23
+Version: 26.9.24
 Release: 1%{?dist}.fmi
 License: MIT
 Group: SmartMet/Engines
@@ -85,6 +85,10 @@ rm -rf $RPM_BUILD_ROOT
 %{_includedir}/smartmet/engines/%{DIRNAME}/*.h
 
 %changelog
+* Thu Sep 24 2026 Mika Heiskanen <mika.heiskanen@fmi.fi> - 26.9.24-1.fmi
+- Wait until an image file has not been modified for min_file_age_secs (default 30) before reading it, since some images are written in place
+- Retry a file which failed to read once it has changed, instead of skipping it for good
+
 * Wed Sep 23 2026 Mika Heiskanen <mika.heiskanen@fmi.fi> - 26.9.23-1.fmi
 - Repackaged due to base library ABI changes
 

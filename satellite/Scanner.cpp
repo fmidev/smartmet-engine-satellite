@@ -17,6 +17,7 @@
 #include <functional>
 #include <iostream>
 #include <iterator>
+#include <optional>
 #include <set>
 
 namespace SmartMet
@@ -98,11 +99,14 @@ Fmi::DateTime Scanner::parseTime(const std::string& theFileName)
  */
 // ----------------------------------------------------------------------
 
-void Scanner::start(const std::map<ProductKey, Product>& theProducts, int theMaxThreads)
+void Scanner::start(const std::map<ProductKey, Product>& theProducts,
+                    int theMaxThreads,
+                    int theMinFileAge)
 {
   try
   {
     const std::size_t max_threads = std::max(1, theMaxThreads);
+    itsMinFileAge = std::max(0, theMinFileAge);
 
     // Group the products by directory
 
@@ -208,10 +212,14 @@ void Scanner::start(const std::map<ProductKey, Product>& theProducts, int theMax
                       const auto index = next++;
                       if (index >= jobs.size() || itsShutdownRequested)
                         return;
-                      readOne(*jobs[index].watch, jobs[index].candidate);
+                      auto& job = jobs[index];
+                      job.ok = readOne(job.directory->watches[job.watch], job.candidate);
                     }
                   });
     }
+
+    for (const auto& job : jobs)
+      done(job);
 
     const auto elapsed = std::chrono::duration<double>(std::chrono::steady_clock::now() - started);
     std::cout << Spine::log_time_str()
@@ -305,10 +313,12 @@ void Scanner::scan(Directory& theDirectory, std::vector<Job>* theJobs)
       return;
     }
 
-    if (mtime == theDirectory.mtime && theDirectory.settled)
-      return;  // Nothing has arrived or left
+    // Unless nothing has arrived or left
+    if (mtime != theDirectory.mtime || !theDirectory.settled)
+      list(theDirectory, mtime);
 
-    list(theDirectory, mtime, theJobs);
+    if (!theDirectory.waiting.empty())
+      examine(theDirectory, theJobs);
   }
   catch (...)
   {
@@ -324,17 +334,17 @@ void Scanner::scan(Directory& theDirectory, std::vector<Job>* theJobs)
  *
  * Only the file names are read. Each new name is matched against the
  * patterns of the products sharing the directory, known names keep the
- * matches of the previous listing.
+ * matches of the previous listing. New files are left waiting for
+ * examine() to decide when they are ready to be read.
  */
 // ----------------------------------------------------------------------
 
-void Scanner::list(Directory& theDirectory, std::time_t theTime, std::vector<Job>* theJobs)
+void Scanner::list(Directory& theDirectory, std::time_t theTime)
 {
   ++itsListings;
   const std::time_t listed_at = std::time(nullptr);
 
-  std::map<std::string, std::vector<std::size_t>> names;
-  std::vector<std::vector<Candidate>> candidates(theDirectory.watches.size());
+  std::map<std::string, File> names;
 
   std::error_code error;
   for (std::filesystem::directory_iterator it(theDirectory.path, error), end; it != end;
@@ -350,50 +360,40 @@ void Scanner::list(Directory& theDirectory, std::time_t theTime, std::vector<Job
     auto known = theDirectory.names.find(name);
     if (known != theDirectory.names.end())
     {
-      names.insert(*known);
+      names.insert(std::move(*known));
       continue;
     }
 
     // A new file. Not every name matches a configured product, one
     // directory may hold composites nobody has asked for.
 
-    std::vector<std::size_t> matches;
+    File file;
     for (std::size_t i = 0; i < theDirectory.watches.size(); i++)
       if (boost::regex_match(name, theDirectory.watches[i].regex))
-        matches.push_back(i);
+        file.matches.push_back(i);
 
-    if (matches.empty())
+    if (file.matches.empty())
       continue;
 
-    const auto time = parseTime(name);
-    if (time.is_not_a_date_time())
+    if (parseTime(name).is_not_a_date_time())
       continue;  // Not a satellite product file name
 
-    for (auto i : matches)
-      candidates[i].emplace_back(time, it->path());
-
-    names.emplace(name, std::move(matches));
+    file.unread = file.matches;
+    theDirectory.waiting.insert(name);
+    names.emplace(name, std::move(file));
   }
 
-  // Deleted files
+  // Deleted files. The moved-from entries of the known names are still
+  // in the old map, hence the lookup is in the new one.
 
-  for (const auto& [name, matches] : theDirectory.names)
+  for (const auto& [name, file] : theDirectory.names)
   {
     if (names.count(name) > 0)
       continue;
     const auto path = (theDirectory.path / name).string();
-    for (auto i : matches)
+    for (auto i : file.matches)
       itsRepository.remove(theDirectory.watches[i].key, path);
-  }
-
-  // New files, per product
-
-  for (std::size_t i = 0; i < theDirectory.watches.size(); i++)
-  {
-    if (itsShutdownRequested)
-      return;
-    if (!candidates[i].empty())
-      read(theDirectory.watches[i], std::move(candidates[i]), theJobs);
+    theDirectory.waiting.erase(name);
   }
 
   theDirectory.names = std::move(names);
@@ -406,27 +406,12 @@ void Scanner::list(Directory& theDirectory, std::time_t theTime, std::vector<Job
 
 // ----------------------------------------------------------------------
 /*!
- * \brief Forget the images of a directory which has disappeared
- */
-// ----------------------------------------------------------------------
-
-void Scanner::forget(Directory& theDirectory)
-{
-  for (const auto& [name, matches] : theDirectory.names)
-  {
-    const auto path = (theDirectory.path / name).string();
-    for (auto i : matches)
-      itsRepository.remove(theDirectory.watches[i].key, path);
-  }
-
-  theDirectory.names.clear();
-  theDirectory.mtime = -1;
-  theDirectory.settled = false;
-}
-
-// ----------------------------------------------------------------------
-/*!
- * \brief Read the metadata of the new images of one product
+ * \brief Read the waiting files of a directory which are ready
+ *
+ * A file is ready when it has not been modified for min_file_age
+ * seconds, and if a read of it has failed before, when it has changed
+ * since. The directory is looked at again as soon as the youngest
+ * waiting file becomes old enough, not only at the next regular tick.
  *
  * Only the newest max_files images stay in the repository, so reading
  * the metadata of the older ones would be work thrown away at once. The
@@ -434,57 +419,194 @@ void Scanner::forget(Directory& theDirectory)
  * weeks of history, and every file read is a GDAL open over NFS. The
  * cutoff is the max_files'th newest time of the images already known
  * and the candidates together, which is exactly the set the repository
- * would keep.
+ * would keep. The files below it are never read.
  */
 // ----------------------------------------------------------------------
 
-void Scanner::read(const Watch& theWatch,
-                   std::vector<Candidate> theCandidates,
-                   std::vector<Job>* theJobs)
+void Scanner::examine(Directory& theDirectory, std::vector<Job>* theJobs)
 {
-  const auto max_files = theWatch.max_files;
+  // The candidates of each product, known from the names alone
 
-  if (max_files > 0)
+  std::vector<std::vector<Job>> candidates(theDirectory.watches.size());
+
+  for (const auto& name : theDirectory.waiting)
   {
-    auto times = itsRepository.times(theWatch.key);
-    times.reserve(times.size() + theCandidates.size());
-    for (const auto& candidate : theCandidates)
-      times.push_back(candidate.first);
-
-    if (times.size() > max_files)
-    {
-      std::nth_element(
-          times.begin(), times.begin() + (max_files - 1), times.end(), std::greater<>());
-      const auto cutoff = times[max_files - 1];
-
-      theCandidates.erase(std::remove_if(theCandidates.begin(),
-                                         theCandidates.end(),
-                                         [&cutoff](const Candidate& candidate)
-                                         { return candidate.first < cutoff; }),
-                          theCandidates.end());
-    }
+    const auto time = parseTime(name);
+    const auto path = theDirectory.path / name;
+    for (auto i : theDirectory.names.at(name).unread)
+      candidates[i].push_back(Job{&theDirectory, i, Candidate(time, path), 0, -1});
   }
 
-  // Newest first, so that the latest image is available as early as
-  // possible while a long scan is still going on
+  // The files below the max_files cutoff are done with without being
+  // read or even stat'ed. The first scan of a directory holding weeks of
+  // history depends on this.
 
-  std::sort(theCandidates.begin(), theCandidates.end(), std::greater<>());
-
-  if (theJobs != nullptr)
+  for (std::size_t i = 0; i < candidates.size(); i++)
   {
-    // The first scan reads later, with many threads. The watch outlives
-    // the jobs: the directories are not touched once the scan has begun.
-    for (auto& candidate : theCandidates)
-      theJobs->push_back(Job{&theWatch, std::move(candidate)});
+    auto& jobs = candidates[i];
+    const auto max_files = theDirectory.watches[i].max_files;
+    if (jobs.empty() || max_files == 0)
+      continue;
+
+    auto times = itsRepository.times(theDirectory.watches[i].key);
+    times.reserve(times.size() + jobs.size());
+    for (const auto& job : jobs)
+      times.push_back(job.candidate.first);
+
+    if (times.size() <= max_files)
+      continue;
+
+    std::nth_element(times.begin(), times.begin() + (max_files - 1), times.end(), std::greater<>());
+    const auto cutoff = times[max_files - 1];
+
+    const auto below = [&cutoff](const Job& job) { return job.candidate.first < cutoff; };
+
+    for (auto& job : jobs)
+    {
+      if (below(job))
+      {
+        job.ok = true;
+        done(job);
+      }
+    }
+    jobs.erase(std::remove_if(jobs.begin(), jobs.end(), below), jobs.end());
+  }
+
+  // Of the rest, the files which are ready. A file matching several
+  // products is stat'ed once.
+
+  const std::time_t now = std::time(nullptr);
+  std::optional<std::time_t> due;
+  std::map<std::string, std::optional<std::pair<std::uintmax_t, std::time_t>>> ready;
+
+  const auto is_ready = [&](Job& job)
+  {
+    const auto name = job.candidate.second.filename().string();
+    auto pos = ready.find(name);
+    if (pos == ready.end())
+    {
+      std::optional<std::pair<std::uintmax_t, std::time_t>> result;
+      struct stat status;
+      // A file gone missing is forgotten by the next listing
+      if (::stat(job.candidate.second.c_str(), &status) == 0)
+      {
+        const auto size = static_cast<std::uintmax_t>(status.st_size);
+        const auto mtime = status.st_mtime;
+        const auto& file = theDirectory.names.at(name);
+
+        // Not if tried already and unchanged since
+        const bool retry = !file.failed || size != file.failed_size || mtime != file.failed_mtime;
+        if (retry && now - mtime < itsMinFileAge)
+          due = std::min(due.value_or(mtime + itsMinFileAge), mtime + itsMinFileAge);
+        else if (retry)
+          result.emplace(size, mtime);
+      }
+      pos = ready.emplace(name, result).first;
+    }
+
+    if (!pos->second)
+      return false;
+    job.size = pos->second->first;
+    job.mtime = pos->second->second;
+    return true;
+  };
+
+  for (auto& jobs : candidates)
+    jobs.erase(std::remove_if(jobs.begin(), jobs.end(), [&](Job& job) { return !is_ready(job); }),
+               jobs.end());
+
+  // Look again as soon as the youngest file is old enough
+
+  if (due)
+  {
+    const auto wait = std::chrono::seconds(std::max<std::time_t>(1, *due - now));
+    theDirectory.next_scan =
+        std::min(theDirectory.next_scan, std::chrono::steady_clock::now() + wait);
+  }
+
+  for (std::size_t i = 0; i < candidates.size(); i++)
+  {
+    auto& jobs = candidates[i];
+
+    // Newest first, so that the latest image is available as early as
+    // possible while a long scan is still going on
+
+    std::sort(jobs.begin(),
+              jobs.end(),
+              [](const Job& a, const Job& b) { return a.candidate > b.candidate; });
+
+    if (theJobs != nullptr)
+    {
+      // The first scan reads later, with many threads. The directory
+      // outlives the jobs: the directories are not touched once the scan
+      // has begun.
+      std::move(jobs.begin(), jobs.end(), std::back_inserter(*theJobs));
+      continue;
+    }
+
+    for (auto& job : jobs)
+    {
+      if (itsShutdownRequested)
+        return;
+      job.ok = readOne(theDirectory.watches[i], job.candidate);
+      done(job);
+    }
+  }
+}
+
+// ----------------------------------------------------------------------
+/*!
+ * \brief Record the outcome of reading a file for one product
+ */
+// ----------------------------------------------------------------------
+
+void Scanner::done(const Job& theJob)
+{
+  auto& directory = *theJob.directory;
+  const auto name = theJob.candidate.second.filename().string();
+
+  auto pos = directory.names.find(name);
+  if (pos == directory.names.end())
+    return;
+
+  auto& file = pos->second;
+
+  if (!theJob.ok)
+  {
+    file.failed = true;
+    file.failed_size = theJob.size;
+    file.failed_mtime = theJob.mtime;
     return;
   }
 
-  for (const auto& candidate : theCandidates)
+  file.unread.erase(std::remove(file.unread.begin(), file.unread.end(), theJob.watch),
+                    file.unread.end());
+  if (file.unread.empty())
   {
-    if (itsShutdownRequested)
-      return;
-    readOne(theWatch, candidate);
+    file.failed = false;
+    directory.waiting.erase(name);
   }
+}
+
+// ----------------------------------------------------------------------
+/*!
+ * \brief Forget the images of a directory which has disappeared
+ */
+// ----------------------------------------------------------------------
+
+void Scanner::forget(Directory& theDirectory)
+{
+  for (const auto& [name, file] : theDirectory.names)
+  {
+    const auto path = (theDirectory.path / name).string();
+    for (auto i : file.matches)
+      itsRepository.remove(theDirectory.watches[i].key, path);
+  }
+
+  theDirectory.names.clear();
+  theDirectory.waiting.clear();
+  theDirectory.mtime = -1;
+  theDirectory.settled = false;
 }
 
 // ----------------------------------------------------------------------
@@ -493,7 +615,7 @@ void Scanner::read(const Watch& theWatch,
  */
 // ----------------------------------------------------------------------
 
-void Scanner::readOne(const Watch& theWatch, const Candidate& theCandidate)
+bool Scanner::readOne(const Watch& theWatch, const Candidate& theCandidate)
 {
   const auto& [time, path] = theCandidate;
 
@@ -507,14 +629,19 @@ void Scanner::readOne(const Watch& theWatch, const Candidate& theCandidate)
 
     auto info = std::make_shared<ImageInfo>(Gdal::readMetadata(path.string(), time, sibling.get()));
     itsRepository.insert(theWatch.key, info);
+    return true;
   }
   catch (const std::exception& e)
   {
-    // A single unreadable file must not stop the scan. Incomplete
-    // files appear in the directories while they are being written.
+    // A single unreadable file must not stop the scan. The file is
+    // tried again if it changes.
     std::cerr << Spine::log_time_str()
               << fmt::format(
-                     " Warning: satellite engine skipped '{}': {}\n", path.string(), e.what());
+                     " Warning: satellite engine could not read '{}', will retry if it "
+                     "changes: {}\n",
+                     path.string(),
+                     e.what());
+    return false;
   }
 }
 

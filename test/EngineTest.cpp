@@ -1282,6 +1282,161 @@ void late_directory()
 }
 
 // ----------------------------------------------------------------------
+/*!
+ * \brief A file which cannot be read is tried again once it changes
+ *
+ * Some images are written directly under their final names, so the
+ * scanner may meet a file whose header has not been written yet. Such a
+ * file used to be skipped for good, which left the full disc products
+ * with no images at all. An unchanged broken file must not be read over
+ * and over, though.
+ */
+// ----------------------------------------------------------------------
+
+void unreadable_file_retried()
+{
+  const char* dir = getenv("SATELLITE_SCAN_DIR");
+  if (dir == nullptr)
+    TEST_FAILED("SATELLITE_SCAN_DIR is not set");
+
+  auto source = find_image(series_product, {}, Fmi::TimeDuration(0, 0, 0));
+  if (!source)
+    TEST_FAILED("No image available for '" + name_of(series_product) + "'");
+
+  const auto count = []()
+  { return satellite->imageCount(livescan_product.first, livescan_product.second); };
+
+  if (count() != 0)
+    TEST_FAILED("The live scan directory was not empty at the start");
+
+  const std::filesystem::path target =
+      std::filesystem::path(dir) / "20230929_2100_Meteosat-10_fog_rgb_ir.tif";
+
+  const auto wait_for = [](const std::function<bool()>& condition)
+  {
+    for (int i = 0; i < 100; i++)
+    {
+      if (condition())
+        return true;
+      std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    }
+    return false;
+  };
+
+  const auto fail = [&](const std::string& message)
+  {
+    std::filesystem::remove(target);
+    TEST_FAILED(message);
+  };
+
+  const auto before = satellite->imagesRead();
+
+  {
+    std::ofstream out(target);
+    out << "Not a GeoTIFF, the header has not been written yet";
+  }
+
+  if (!wait_for([&]() { return satellite->imagesRead() > before; }))
+    fail("The unreadable file was never tried");
+
+  if (count() != 0)
+    fail("The unreadable file was accepted as an image");
+
+  // While the file does not change it must not be read again
+  const auto tried = satellite->imagesRead();
+  std::this_thread::sleep_for(std::chrono::milliseconds(3500));
+  if (satellite->imagesRead() != tried)
+    fail(fmt::format("The unchanged unreadable file was read {} more times",
+                     satellite->imagesRead() - tried));
+
+  // Completing the file in place must make it available
+  std::filesystem::copy_file(
+      source->path, target, std::filesystem::copy_options::overwrite_existing);
+
+  if (!wait_for([&]() { return count() == 1; }))
+    fail("The completed file was not noticed within 20 seconds");
+
+  auto found = find_image(livescan_product, {}, Fmi::TimeDuration(0, 0, 0));
+  if (!found || found->width != source->width)
+    fail("The metadata of the completed file was not read correctly");
+
+  std::filesystem::remove(target);
+
+  if (!wait_for([&]() { return count() == 0; }))
+    TEST_FAILED("The deleted file was not forgotten within 20 seconds");
+
+  TEST_PASSED();
+}
+
+// ----------------------------------------------------------------------
+/*!
+ * \brief A file is not read while it may still be being written
+ *
+ * A file caught in the middle of being written may well open, with its
+ * pixels missing, and would then be served as a transparent image. The
+ * test configuration sets min_file_age_secs to 2, and file times have a
+ * one second resolution, hence a new file must wait at least a second.
+ */
+// ----------------------------------------------------------------------
+
+void young_file_waits()
+{
+  const char* dir = getenv("SATELLITE_SCAN_DIR");
+  if (dir == nullptr)
+    TEST_FAILED("SATELLITE_SCAN_DIR is not set");
+
+  auto source = find_image(series_product, {}, Fmi::TimeDuration(0, 0, 0));
+  if (!source)
+    TEST_FAILED("No image available for '" + name_of(series_product) + "'");
+
+  const auto count = []()
+  { return satellite->imageCount(livescan_product.first, livescan_product.second); };
+
+  if (count() != 0)
+    TEST_FAILED("The live scan directory was not empty at the start");
+
+  const std::filesystem::path target =
+      std::filesystem::path(dir) / "20230929_2100_Meteosat-10_fog_rgb_ir.tif";
+
+  std::filesystem::copy_file(
+      source->path, target, std::filesystem::copy_options::overwrite_existing);
+  const auto written = std::chrono::steady_clock::now();
+
+  bool seen = false;
+  for (int i = 0; i < 200 && !seen; i++)
+  {
+    seen = (count() == 1);
+    if (!seen)
+      std::this_thread::sleep_for(std::chrono::milliseconds(100));
+  }
+  const auto waited = std::chrono::duration<double>(std::chrono::steady_clock::now() - written);
+
+  std::filesystem::remove(target);
+
+  if (!seen)
+    TEST_FAILED("The new file was not noticed within 20 seconds");
+  if (waited.count() < 0.9)
+    TEST_FAILED(fmt::format("The new file was read after {:.2f} seconds, before it was old enough",
+                            waited.count()));
+
+  const auto forgotten = [&]()
+  {
+    for (int i = 0; i < 100; i++)
+    {
+      if (count() == 0)
+        return true;
+      std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    }
+    return false;
+  };
+
+  if (!forgotten())
+    TEST_FAILED("The deleted file was not forgotten within 20 seconds");
+
+  TEST_PASSED();
+}
+
+// ----------------------------------------------------------------------
 
 class tests : public tframe::tests
 {
@@ -1312,6 +1467,8 @@ class tests : public tframe::tests
     TEST(staggered_updates);
     TEST(quiet_directory);
     TEST(late_directory);
+    TEST(unreadable_file_retried);
+    TEST(young_file_waits);
     TEST(warp_speed);
   }
 

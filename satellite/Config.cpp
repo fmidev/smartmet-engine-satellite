@@ -50,6 +50,13 @@ Config::Config(const std::string& theFileName)
     if (itsConfig.lookupValue("maxthreads", itsMaxThreads) && itsMaxThreads < 1)
       throw Fmi::Exception(BCP, "Setting 'maxthreads' must be at least 1 in '" + theFileName + "'");
 
+    // Some images are written directly under their final names, and a
+    // file read while it is being written has no pixels or no header
+    // yet. A file is read once it has not changed for this long.
+    if (itsConfig.lookupValue("min_file_age_secs", itsMinFileAge) && itsMinFileAge < 0)
+      throw Fmi::Exception(
+          BCP, "Setting 'min_file_age_secs' must not be negative in '" + theFileName + "'");
+
     if (itsConfig.exists("products"))
     {
       const auto& products = itsConfig.lookup("products");

@@ -62,6 +62,7 @@ Metop-B and Metop-C from one pass to the next.
 ```
 rootdir = "/smartmet/satellite/weather";
 maxthreads = 25;   # threads reading image metadata in the first scan, default 10
+min_file_age_secs = 30;  # a file is read once unmodified this long, default 30
 
 products:
 {
@@ -115,8 +116,9 @@ for example holds
 
 so `.*_EPSG3035_ir108\.tif$` picks exactly one of the four, while a
 pattern like `.*ir108.*\.tif$` would pick all of them. Anchoring also
-keeps the partially written files out: the production system writes
-`name.tif.tmp.tif` and `name.tif.ovr.tmp` while it works.
+keeps some partially written files out: the production system writes
+`name.tif.tmp.tif` and `name.tif.ovr.tmp` while it works. Not all of
+them, though, see [Scanning](#scanning).
 
 The `title`, `abstract` and `keywords` end up in the WMS GetCapabilities
 response. The bounding box is estimated from the newest image and can be
@@ -219,9 +221,8 @@ interval, however many composites it holds. The interval of a directory
 is the shortest `refresh_interval_secs` of its products.
 
 This rests on the assumption that files arrive and get deleted but are
-never rewritten in place, since rewriting a file does not change the
-directory time. The satellite production writes its images under a
-temporary name and renames them into place, which is a directory change.
+never rewritten in place once complete, since rewriting a file does not
+change the directory time.
 Note also that the directory time has a one second resolution, hence a
 file arriving within the same second as a listing would go unnoticed
 until the next change. The scanner handles this by listing a directory
@@ -230,11 +231,26 @@ after the directory time. On NFS the client caches directory attributes
 for up to a minute by default (`acdirmax`), which bounds how soon a new
 image can be noticed regardless of the scan interval.
 
-A listing reads the file names only, no file is stat'ed or opened. New
-names are matched against the patterns of the products sharing the
-directory, and names seen before keep their matches from the previous
-listing, so the regular expressions run once per file. Deleted names
-are removed from the repository. A directory which does not exist is a
+A listing reads the file names only. New names are matched against the
+patterns of the products sharing the directory, and names seen before
+keep their matches from the previous listing, so the regular
+expressions run once per file. Deleted names are removed from the
+repository.
+
+A new file is not read at once. The production writes some images
+directly under their final names, among them the 100 MB full disc
+`geos` composites, which take long enough to write that the scanner
+routinely meets them half written. Such a file either fails to open,
+or opens with its header complete and its pixels missing and renders
+as a transparent image. Hence a matching file waits until it has not
+been modified for `min_file_age_secs` seconds (default 30), and the
+directory is looked at again as soon as the file becomes old enough. A
+file which still fails to read is tried again once its size or
+modification time has changed, and not before, so a broken leftover
+file costs one stat per tick and one warning. The waiting files are
+stat'ed individually, the directory is not listed for them. On NFS the
+client caches file attributes for a few seconds while a file is
+changing (`acregmin`), which the default age covers comfortably. A directory which does not exist is a
 warning at startup, not a failure: it is polled like the others and
 picked up when it appears, and the images of a directory which
 disappears are forgotten. The production has moved directories between
