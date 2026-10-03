@@ -160,6 +160,7 @@ void Scanner::start(const std::map<ProductKey, Product>& theProducts,
     const auto run_workers = [&](std::size_t count, const std::function<void(std::size_t)>& work)
     {
       std::vector<std::thread> workers;
+      workers.reserve(count);
       for (std::size_t i = 0; i < count; i++)
         workers.emplace_back(
             [&work, i]()
