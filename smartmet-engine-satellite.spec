@@ -3,7 +3,7 @@
 %define SPECNAME smartmet-engine-%{DIRNAME}
 Summary: SmartMet satellite engine
 Name: %{SPECNAME}
-Version: 26.9.24
+Version: 26.10.3
 Release: 1%{?dist}.fmi
 License: MIT
 Group: SmartMet/Engines
@@ -29,8 +29,8 @@ BuildRequires: rpm-build
 BuildRequires: gcc-c++
 BuildRequires: make
 BuildRequires: %{smartmet_boost}-devel
-BuildRequires: smartmet-library-spine-devel >= 26.9.23
-BuildRequires: smartmet-library-macgyver-devel >= 26.9.23
+BuildRequires: smartmet-library-spine-devel >= 26.10.3
+BuildRequires: smartmet-library-macgyver-devel >= 26.10.3
 BuildRequires: smartmet-utils-devel >= 26.9.3
 BuildRequires: libconfig17-devel
 BuildRequires: %{smartmet_fmt_devel}
@@ -40,8 +40,8 @@ BuildRequires: gdal312-devel
 #TestRequires: smartmet-library-regression
 Requires: %{smartmet_boost}-thread
 Requires: %{smartmet_boost}-regex
-Requires: smartmet-library-spine >= 26.9.23
-Requires: smartmet-library-macgyver >= 26.9.23
+Requires: smartmet-library-spine >= 26.10.3
+Requires: smartmet-library-macgyver >= 26.10.3
 Requires: libconfig17
 Requires: %{smartmet_fmt}
 Requires: gdal312-libs
@@ -56,8 +56,8 @@ Summary: SmartMet %{SPECNAME} development headers
 Group: SmartMet/Development
 Provides: %{SPECNAME}-devel
 Requires: %{SPECNAME} = %{version}-%{release}
-Requires: smartmet-library-spine-devel >= 26.9.23
-Requires: smartmet-library-macgyver-devel >= 26.9.23
+Requires: smartmet-library-spine-devel >= 26.10.3
+Requires: smartmet-library-macgyver-devel >= 26.10.3
 Requires: %{smartmet_boost}-devel
 %description -n %{SPECNAME}-devel
 SmartMet %{SPECNAME} development headers.
@@ -85,6 +85,9 @@ rm -rf $RPM_BUILD_ROOT
 %{_includedir}/smartmet/engines/%{DIRNAME}/*.h
 
 %changelog
+* Sat Oct 03 2026 Mika Heiskanen <mika.heiskanen@fmi.fi> - 26.10.3-1.fmi
+- Remove unnecessary copies found by clang-tidy performance checks
+
 * Thu Sep 24 2026 Mika Heiskanen <mika.heiskanen@fmi.fi> - 26.9.24-1.fmi
 - Wait until an image file has not been modified for min_file_age_secs (default 30) before reading it, since some images are written in place
 - Retry a file which failed to read once it has changed, instead of skipping it for good
