@@ -252,7 +252,7 @@ void Scanner::start(const std::map<ProductKey, Product>& theProducts,
 void Scanner::stop()
 {
   {
-    std::lock_guard<std::mutex> lock(itsMutex);
+    std::scoped_lock lock(itsMutex);
     itsShutdownRequested = true;
   }
   itsCondition.notify_all();

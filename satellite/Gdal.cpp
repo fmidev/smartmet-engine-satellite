@@ -183,7 +183,7 @@ std::optional<std::array<double, 4>> compute_bbox(const ImageInfo& info)
   std::unique_ptr<OGRCoordinateTransformation> transformation;
 
   {
-    std::lock_guard<std::mutex> lock(proj_mutex());
+    std::scoped_lock lock(proj_mutex());
 
     if (source.SetFromUserInput(info.wkt.c_str()) != OGRERR_NONE)
       return {};
@@ -272,7 +272,7 @@ std::optional<std::array<double, 4>> estimate_bbox(const ImageInfo& info)
       "{}|{}|{}|{}", info.width, info.height, fmt::join(info.geotransform, ","), info.wkt);
 
   {
-    std::lock_guard<std::mutex> lock(cache_mutex);
+    std::scoped_lock lock(cache_mutex);
     auto pos = cache.find(key);
     if (pos != cache.end())
       return pos->second;
@@ -281,7 +281,7 @@ std::optional<std::array<double, 4>> estimate_bbox(const ImageInfo& info)
   auto bbox = compute_bbox(info);
 
   {
-    std::lock_guard<std::mutex> lock(cache_mutex);
+    std::scoped_lock lock(cache_mutex);
     if (cache.size() >= 1000)  // grids change with the seasons at most, this is never reached
       cache.clear();
     cache.emplace(key, bbox);
@@ -422,7 +422,7 @@ std::string target_wkt(const std::string& theCrs)
 {
   std::string wkt;
   {
-    std::lock_guard<std::mutex> lock(proj_mutex());
+    std::scoped_lock lock(proj_mutex());
     OGRSpatialReference srs;
     if (srs.SetFromUserInput(theCrs.c_str()) != OGRERR_NONE)
       throw Fmi::Exception(BCP, "Failed to parse the target projection")
@@ -488,7 +488,7 @@ DatasetPtr open_source(const ImageInfo& theImage,
   {
     TransformerPtr probe;
     {
-      std::lock_guard<std::mutex> lock(proj_mutex());
+      std::scoped_lock lock(proj_mutex());
       probe.reset(GDALCreateGenImgProjTransformer2(src.get(), dst, nullptr));
     }
     if (probe)
@@ -536,7 +536,7 @@ void execute_warp(GDALWarpOptions* theOptions,
                   const std::string& thePath)
 {
   {
-    std::lock_guard<std::mutex> lock(proj_mutex());
+    std::scoped_lock lock(proj_mutex());
     theOptions->pTransformerArg =
         GDALCreateGenImgProjTransformer2(theOptions->hSrcDS, theOptions->hDstDS, nullptr);
   }
