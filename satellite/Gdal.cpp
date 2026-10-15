@@ -335,7 +335,7 @@ int select_overview(GDALDatasetH src, void* transformer, const WarpOptions& opti
         transformer, TRUE, static_cast<int>(xs.size()), xs.data(), ys.data(), zs.data(), ok.data());
   }
 
-  const auto index = [steps](int i, int j) { return j * (steps + 1) + i; };
+  const auto index = [](int i, int j) { return j * (steps + 1) + i; };
 
   std::vector<double> scales;
 
