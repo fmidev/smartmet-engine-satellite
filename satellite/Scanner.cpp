@@ -31,7 +31,7 @@ namespace
 // Modification time of a directory in seconds, -1 if it cannot be read
 std::time_t directory_time(const std::filesystem::path& thePath)
 {
-  struct stat status;
+  struct stat status{};
   if (::stat(thePath.c_str(), &status) != 0 || !S_ISDIR(status.st_mode))
     return -1;
   return status.st_mtime;
@@ -487,7 +487,7 @@ void Scanner::examine(Directory& theDirectory, std::vector<Job>* theJobs)
     if (pos == ready.end())
     {
       std::optional<std::pair<std::uintmax_t, std::time_t>> result;
-      struct stat status;
+      struct stat status{};
       // A file gone missing is forgotten by the next listing
       if (::stat(job.candidate.second.c_str(), &status) == 0)
       {
