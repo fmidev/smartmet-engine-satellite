@@ -29,8 +29,8 @@ BuildRequires: rpm-build
 BuildRequires: gcc-c++
 BuildRequires: make
 BuildRequires: %{smartmet_boost}-devel
-BuildRequires: smartmet-library-spine-devel >= 26.10.13
-BuildRequires: smartmet-library-macgyver-devel >= 26.10.3
+BuildRequires: smartmet-library-spine-devel >= 26.10.15
+BuildRequires: smartmet-library-macgyver-devel >= 26.10.15
 BuildRequires: smartmet-utils-devel >= 26.9.3
 BuildRequires: libconfig17-devel
 BuildRequires: %{smartmet_fmt_devel}
@@ -40,8 +40,8 @@ BuildRequires: gdal312-devel
 #TestRequires: smartmet-library-regression
 Requires: %{smartmet_boost}-thread
 Requires: %{smartmet_boost}-regex
-Requires: smartmet-library-spine >= 26.10.13
-Requires: smartmet-library-macgyver >= 26.10.3
+Requires: smartmet-library-spine >= 26.10.15
+Requires: smartmet-library-macgyver >= 26.10.15
 Requires: libconfig17
 Requires: %{smartmet_fmt}
 Requires: gdal312-libs
@@ -56,8 +56,8 @@ Summary: SmartMet %{SPECNAME} development headers
 Group: SmartMet/Development
 Provides: %{SPECNAME}-devel
 Requires: %{SPECNAME} = %{version}-%{release}
-Requires: smartmet-library-spine-devel >= 26.10.13
-Requires: smartmet-library-macgyver-devel >= 26.10.3
+Requires: smartmet-library-spine-devel >= 26.10.15
+Requires: smartmet-library-macgyver-devel >= 26.10.15
 Requires: %{smartmet_boost}-devel
 %description -n %{SPECNAME}-devel
 SmartMet %{SPECNAME} development headers.
@@ -87,7 +87,7 @@ rm -rf $RPM_BUILD_ROOT
 %changelog
 * Thu Oct 15 2026 Mika Heiskanen <mika.heiskanen@fmi.fi> - 26.10.15-1.fmi
 - Fixed clang-tidy correctness findings (member initialization, rule of five, printf formats, dead stores)
-- Requires 26.10.13 versions of spine due to their ABI changes
+- Requires 26.10.15 versions of spine due to their ABI changes
 
 * Sat Oct 03 2026 Mika Heiskanen <mika.heiskanen@fmi.fi> - 26.10.3-1.fmi
 - Remove unnecessary copies found by clang-tidy performance checks
