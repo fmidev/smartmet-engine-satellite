@@ -37,6 +37,22 @@ std::time_t directory_time(const std::filesystem::path& thePath)
   return status.st_mtime;
 }
 
+// Run count worker threads calling work(i) and wait for them to finish
+void run_workers(std::size_t count, const std::function<void(std::size_t)>& work)
+{
+  std::vector<std::thread> workers;
+  workers.reserve(count);
+  for (std::size_t i = 0; i < count; i++)
+    workers.emplace_back(
+        [&work, i]()
+        {
+          Fmi::set_thread_name("sat-scan");
+          work(i);
+        });
+  for (auto& worker : workers)
+    worker.join();
+}
+
 }  // namespace
 
 // ----------------------------------------------------------------------
@@ -108,37 +124,7 @@ void Scanner::start(const std::map<ProductKey, Product>& theProducts,
     const std::size_t max_threads = std::max(1, theMaxThreads);
     itsMinFileAge = std::max(0, theMinFileAge);
 
-    // Group the products by directory
-
-    std::map<std::filesystem::path, Directory> directories;
-
-    for (const auto& [key, product] : theProducts)
-    {
-      auto& directory = directories[product.directory];
-      directory.path = product.directory;
-      directory.watches.push_back(Watch{key, product.regex, product.max_files});
-
-      const std::chrono::seconds interval(std::max(1, product.refresh_interval_secs));
-      if (directory.interval.count() == 0 || interval < directory.interval)
-        directory.interval = interval;
-    }
-
-    for (auto& [path, directory] : directories)
-    {
-      // A missing directory must not prevent the other products from
-      // working, and the production has moved directories from one
-      // machine to another before, so it is polled like the others and
-      // picked up if it appears.
-      if (!std::filesystem::is_directory(path))
-        std::cerr << Spine::log_time_str()
-                  << fmt::format(
-                         " Warning: satellite directory '{}' does not exist, its {} "
-                         "product(s) will be empty until it appears\n",
-                         path.string(),
-                         directory.watches.size());
-
-      itsDirectories.push_back(std::move(directory));
-    }
+    addDirectories(theProducts);
 
     if (itsDirectories.empty())
     {
@@ -157,67 +143,8 @@ void Scanner::start(const std::map<ProductKey, Product>& theProducts,
 
     const auto started = std::chrono::steady_clock::now();
 
-    const auto run_workers = [&](std::size_t count, const std::function<void(std::size_t)>& work)
-    {
-      std::vector<std::thread> workers;
-      workers.reserve(count);
-      for (std::size_t i = 0; i < count; i++)
-        workers.emplace_back(
-            [&work, i]()
-            {
-              Fmi::set_thread_name("sat-scan");
-              work(i);
-            });
-      for (auto& worker : workers)
-        worker.join();
-    };
-
-    // Phase 1: list
-
-    std::vector<std::vector<Job>> listed(itsDirectories.size());
-    {
-      std::atomic<std::size_t> next{0};
-      run_workers(std::min(itsDirectories.size(), max_threads),
-                  [&](std::size_t)
-                  {
-                    for (;;)
-                    {
-                      const auto index = next++;
-                      if (index >= itsDirectories.size() || itsShutdownRequested)
-                        return;
-                      scan(itsDirectories[index], &listed[index]);
-                    }
-                  });
-    }
-
-    std::vector<Job> jobs;
-    for (auto& part : listed)
-      jobs.insert(
-          jobs.end(), std::make_move_iterator(part.begin()), std::make_move_iterator(part.end()));
-    listed.clear();
-
-    std::stable_sort(jobs.begin(),
-                     jobs.end(),
-                     [](const Job& a, const Job& b)
-                     { return a.candidate.first > b.candidate.first; });
-
-    // Phase 2: read
-
-    {
-      std::atomic<std::size_t> next{0};
-      run_workers(std::min(jobs.size(), max_threads),
-                  [&](std::size_t)
-                  {
-                    for (;;)
-                    {
-                      const auto index = next++;
-                      if (index >= jobs.size() || itsShutdownRequested)
-                        return;
-                      auto& job = jobs[index];
-                      job.ok = readOne(job.directory->watches[job.watch], job.candidate);
-                    }
-                  });
-    }
+    std::vector<Job> jobs = listAll(max_threads);
+    readAll(jobs, max_threads);
 
     for (const auto& job : jobs)
       done(job);
@@ -245,6 +172,106 @@ void Scanner::start(const std::map<ProductKey, Product>& theProducts,
   {
     throw Fmi::Exception::Trace(BCP, "Failed to start the satellite directory scanner");
   }
+}
+
+// ----------------------------------------------------------------------
+/*!
+ * \brief Group the products by directory into itsDirectories
+ */
+// ----------------------------------------------------------------------
+
+void Scanner::addDirectories(const std::map<ProductKey, Product>& theProducts)
+{
+  std::map<std::filesystem::path, Directory> directories;
+
+  for (const auto& [key, product] : theProducts)
+  {
+    auto& directory = directories[product.directory];
+    directory.path = product.directory;
+    directory.watches.push_back(Watch{key, product.regex, product.max_files});
+
+    const std::chrono::seconds interval(std::max(1, product.refresh_interval_secs));
+    if (directory.interval.count() == 0 || interval < directory.interval)
+      directory.interval = interval;
+  }
+
+  for (auto& [path, directory] : directories)
+  {
+    // A missing directory must not prevent the other products from
+    // working, and the production has moved directories from one
+    // machine to another before, so it is polled like the others and
+    // picked up if it appears.
+    if (!std::filesystem::is_directory(path))
+      std::cerr << Spine::log_time_str()
+                << fmt::format(
+                       " Warning: satellite directory '{}' does not exist, its {} "
+                       "product(s) will be empty until it appears\n",
+                       path.string(),
+                       directory.watches.size());
+
+    itsDirectories.push_back(std::move(directory));
+  }
+}
+
+// ----------------------------------------------------------------------
+/*!
+ * \brief First scan phase 1: list all directories in parallel
+ *
+ * Returns the collected reads, newest images first.
+ */
+// ----------------------------------------------------------------------
+
+std::vector<Scanner::Job> Scanner::listAll(std::size_t theMaxThreads)
+{
+  std::vector<std::vector<Job>> listed(itsDirectories.size());
+  {
+    std::atomic<std::size_t> next{0};
+    run_workers(std::min(itsDirectories.size(), theMaxThreads),
+                [&](std::size_t)
+                {
+                  for (;;)
+                  {
+                    const auto index = next++;
+                    if (index >= itsDirectories.size() || itsShutdownRequested)
+                      return;
+                    scan(itsDirectories[index], &listed[index]);
+                  }
+                });
+  }
+
+  std::vector<Job> jobs;
+  for (auto& part : listed)
+    jobs.insert(
+        jobs.end(), std::make_move_iterator(part.begin()), std::make_move_iterator(part.end()));
+  listed.clear();
+
+  std::stable_sort(jobs.begin(),
+                   jobs.end(),
+                   [](const Job& a, const Job& b) { return a.candidate.first > b.candidate.first; });
+  return jobs;
+}
+
+// ----------------------------------------------------------------------
+/*!
+ * \brief First scan phase 2: do the collected reads in parallel
+ */
+// ----------------------------------------------------------------------
+
+void Scanner::readAll(std::vector<Job>& theJobs, std::size_t theMaxThreads)
+{
+  std::atomic<std::size_t> next{0};
+  run_workers(std::min(theJobs.size(), theMaxThreads),
+              [&](std::size_t)
+              {
+                for (;;)
+                {
+                  const auto index = next++;
+                  if (index >= theJobs.size() || itsShutdownRequested)
+                    return;
+                  auto& job = theJobs[index];
+                  job.ok = readOne(job.directory->watches[job.watch], job.candidate);
+                }
+              });
 }
 
 // ----------------------------------------------------------------------

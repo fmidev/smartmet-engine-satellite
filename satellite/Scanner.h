@@ -152,6 +152,10 @@ class Scanner
     bool ok{false};
   };
 
+  void addDirectories(const std::map<ProductKey, Product>& theProducts);
+  std::vector<Job> listAll(std::size_t theMaxThreads);
+  void readAll(std::vector<Job>& theJobs, std::size_t theMaxThreads);
+
   // With a job list the reads are collected into it instead of being done
   void scan(Directory& theDirectory, std::vector<Job>* theJobs = nullptr);
   void list(Directory& theDirectory, std::time_t theTime);
