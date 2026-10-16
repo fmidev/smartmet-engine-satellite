@@ -94,6 +94,42 @@ Config::Config(const std::string& theFileName)
   }
 }
 
+namespace
+{
+// Parse the optional keywords of a product
+void parse_keywords(const libconfig::Setting& theSetting, Product& product)
+{
+  if (!theSetting.exists("keywords"))
+    return;
+
+  const auto& keywords = theSetting.lookup("keywords");
+  if (!keywords.isArray())
+    throw Fmi::Exception(BCP, "Setting 'keywords' must be an array");
+  for (int i = 0; i < keywords.getLength(); i++)
+    product.keywords.emplace_back(static_cast<const char*>(keywords[i]));
+}
+
+// Parse the optional bounding box [minx, miny, maxx, maxy] of a product
+void parse_bbox(const libconfig::Setting& theSetting, Product& product)
+{
+  if (!theSetting.exists("bbox"))
+    return;
+
+  const auto& bbox = theSetting.lookup("bbox");
+  if (!bbox.isArray() || bbox.getLength() != 4)
+    throw Fmi::Exception(BCP, "Setting 'bbox' must be an array of four numbers");
+
+  std::array<double, 4> values{};
+  for (int i = 0; i < 4; i++)
+    values[i] = static_cast<double>(bbox[i]);
+
+  if (values[0] >= values[2] || values[1] >= values[3])
+    throw Fmi::Exception(BCP, "Setting 'bbox' must be [minx, miny, maxx, maxy]");
+
+  product.bbox = values;
+}
+}  // namespace
+
 // ----------------------------------------------------------------------
 /*!
  * \brief Parse the settings of a single product
@@ -150,30 +186,8 @@ void Config::parseProduct(const libconfig::Setting& theSetting)
     if (product.refresh_interval_secs <= 0)
       throw Fmi::Exception(BCP, "Setting 'refresh_interval_secs' must be positive");
 
-    if (theSetting.exists("keywords"))
-    {
-      const auto& keywords = theSetting.lookup("keywords");
-      if (!keywords.isArray())
-        throw Fmi::Exception(BCP, "Setting 'keywords' must be an array");
-      for (int i = 0; i < keywords.getLength(); i++)
-        product.keywords.emplace_back(static_cast<const char*>(keywords[i]));
-    }
-
-    if (theSetting.exists("bbox"))
-    {
-      const auto& bbox = theSetting.lookup("bbox");
-      if (!bbox.isArray() || bbox.getLength() != 4)
-        throw Fmi::Exception(BCP, "Setting 'bbox' must be an array of four numbers");
-
-      std::array<double, 4> values{};
-      for (int i = 0; i < 4; i++)
-        values[i] = static_cast<double>(bbox[i]);
-
-      if (values[0] >= values[2] || values[1] >= values[3])
-        throw Fmi::Exception(BCP, "Setting 'bbox' must be [minx, miny, maxx, maxy]");
-
-      product.bbox = values;
-    }
+    parse_keywords(theSetting, product);
+    parse_bbox(theSetting, product);
 
     const auto key = make_key(product.producer, product.parameter);
 
