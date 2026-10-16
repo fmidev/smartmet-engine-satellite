@@ -160,6 +160,14 @@ class Scanner
   void scan(Directory& theDirectory, std::vector<Job>* theJobs = nullptr);
   void list(Directory& theDirectory, std::time_t theTime);
   void examine(Directory& theDirectory, std::vector<Job>* theJobs);
+  void dropBelowMaxFiles(Directory& theDirectory, std::vector<std::vector<Job>>& theCandidates);
+  void keepReadyFiles(Directory& theDirectory, std::vector<std::vector<Job>>& theCandidates);
+  using ReadyFiles = std::map<std::string, std::optional<std::pair<std::uintmax_t, std::time_t>>>;
+  bool isReady(Job& theJob,
+               const Directory& theDirectory,
+               std::time_t theNow,
+               std::optional<std::time_t>& theDue,
+               ReadyFiles& theReady) const;
   void forget(Directory& theDirectory);
   bool readOne(const Watch& theWatch, const Candidate& theCandidate);
   static void done(const Job& theJob);

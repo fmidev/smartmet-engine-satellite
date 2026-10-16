@@ -435,6 +435,121 @@ void Scanner::list(Directory& theDirectory, std::time_t theTime)
 
 // ----------------------------------------------------------------------
 /*!
+ * \brief Mark the files below the max_files cutoff done without reading them
+ */
+// ----------------------------------------------------------------------
+
+void Scanner::dropBelowMaxFiles(Directory& theDirectory,
+                                std::vector<std::vector<Job>>& theCandidates)
+{
+  for (std::size_t i = 0; i < theCandidates.size(); i++)
+  {
+    auto& jobs = theCandidates[i];
+    const auto max_files = theDirectory.watches[i].max_files;
+    if (jobs.empty() || max_files == 0)
+      continue;
+
+    auto times = itsRepository.times(theDirectory.watches[i].key);
+    times.reserve(times.size() + jobs.size());
+    for (const auto& job : jobs)
+      times.push_back(job.candidate.first);
+
+    if (times.size() <= max_files)
+      continue;
+
+    std::nth_element(times.begin(), times.begin() + (max_files - 1), times.end(), std::greater<>());
+    const auto cutoff = times[max_files - 1];
+
+    const auto below = [&cutoff](const Job& job) { return job.candidate.first < cutoff; };
+
+    for (auto& job : jobs)
+    {
+      if (below(job))
+      {
+        job.ok = true;
+        done(job);
+      }
+    }
+    jobs.erase(std::remove_if(jobs.begin(), jobs.end(), below), jobs.end());
+  }
+}
+
+// ----------------------------------------------------------------------
+/*!
+ * \brief Test whether the file of the job is ready to be read
+ *
+ * A file matching several products is stat'ed once. The time when the
+ * youngest file becomes old enough is collected into theDue.
+ */
+// ----------------------------------------------------------------------
+
+bool Scanner::isReady(Job& theJob,
+                      const Directory& theDirectory,
+                      std::time_t theNow,
+                      std::optional<std::time_t>& theDue,
+                      ReadyFiles& theReady) const
+{
+  const auto name = theJob.candidate.second.filename().string();
+  auto pos = theReady.find(name);
+  if (pos == theReady.end())
+  {
+    std::optional<std::pair<std::uintmax_t, std::time_t>> result;
+    struct stat status{};
+    // A file gone missing is forgotten by the next listing
+    if (::stat(theJob.candidate.second.c_str(), &status) == 0)
+    {
+      const auto size = static_cast<std::uintmax_t>(status.st_size);
+      const auto mtime = status.st_mtime;
+      const auto& file = theDirectory.names.at(name);
+
+      // Not if tried already and unchanged since
+      const bool retry = !file.failed || size != file.failed_size || mtime != file.failed_mtime;
+      if (retry && theNow - mtime < itsMinFileAge)
+        theDue = std::min(theDue.value_or(mtime + itsMinFileAge), mtime + itsMinFileAge);
+      else if (retry)
+        result.emplace(size, mtime);
+    }
+    pos = theReady.emplace(name, result).first;
+  }
+
+  if (!pos->second)
+    return false;
+  theJob.size = pos->second->first;
+  theJob.mtime = pos->second->second;
+  return true;
+}
+
+// ----------------------------------------------------------------------
+/*!
+ * \brief Keep only the jobs whose files are ready, and schedule the next scan
+ */
+// ----------------------------------------------------------------------
+
+void Scanner::keepReadyFiles(Directory& theDirectory, std::vector<std::vector<Job>>& theCandidates)
+{
+  const std::time_t now = std::time(nullptr);
+  std::optional<std::time_t> due;
+  ReadyFiles ready;
+
+  for (auto& jobs : theCandidates)
+    jobs.erase(std::remove_if(jobs.begin(),
+                              jobs.end(),
+                              [&](Job& job)
+                              { return !isReady(job, theDirectory, now, due, ready); }),
+               jobs.end());
+
+  // Look again as soon as the youngest file is old enough
+
+  if (due)
+  {
+    const auto wait = std::chrono::seconds(std::max<std::time_t>(1, *due - now));
+    theDirectory.next_scan =
+        std::min(theDirectory.next_scan, std::chrono::steady_clock::now() + wait);
+  }
+}
+
+// ----------------------------------------------------------------------
+/*!
  * \brief Read the waiting files of a directory which are ready
  *
  * A file is ready when it has not been modified for min_file_age
@@ -470,88 +585,12 @@ void Scanner::examine(Directory& theDirectory, std::vector<Job>* theJobs)
   // read or even stat'ed. The first scan of a directory holding weeks of
   // history depends on this.
 
-  for (std::size_t i = 0; i < candidates.size(); i++)
-  {
-    auto& jobs = candidates[i];
-    const auto max_files = theDirectory.watches[i].max_files;
-    if (jobs.empty() || max_files == 0)
-      continue;
-
-    auto times = itsRepository.times(theDirectory.watches[i].key);
-    times.reserve(times.size() + jobs.size());
-    for (const auto& job : jobs)
-      times.push_back(job.candidate.first);
-
-    if (times.size() <= max_files)
-      continue;
-
-    std::nth_element(times.begin(), times.begin() + (max_files - 1), times.end(), std::greater<>());
-    const auto cutoff = times[max_files - 1];
-
-    const auto below = [&cutoff](const Job& job) { return job.candidate.first < cutoff; };
-
-    for (auto& job : jobs)
-    {
-      if (below(job))
-      {
-        job.ok = true;
-        done(job);
-      }
-    }
-    jobs.erase(std::remove_if(jobs.begin(), jobs.end(), below), jobs.end());
-  }
+  dropBelowMaxFiles(theDirectory, candidates);
 
   // Of the rest, the files which are ready. A file matching several
   // products is stat'ed once.
 
-  const std::time_t now = std::time(nullptr);
-  std::optional<std::time_t> due;
-  std::map<std::string, std::optional<std::pair<std::uintmax_t, std::time_t>>> ready;
-
-  const auto is_ready = [&](Job& job)
-  {
-    const auto name = job.candidate.second.filename().string();
-    auto pos = ready.find(name);
-    if (pos == ready.end())
-    {
-      std::optional<std::pair<std::uintmax_t, std::time_t>> result;
-      struct stat status{};
-      // A file gone missing is forgotten by the next listing
-      if (::stat(job.candidate.second.c_str(), &status) == 0)
-      {
-        const auto size = static_cast<std::uintmax_t>(status.st_size);
-        const auto mtime = status.st_mtime;
-        const auto& file = theDirectory.names.at(name);
-
-        // Not if tried already and unchanged since
-        const bool retry = !file.failed || size != file.failed_size || mtime != file.failed_mtime;
-        if (retry && now - mtime < itsMinFileAge)
-          due = std::min(due.value_or(mtime + itsMinFileAge), mtime + itsMinFileAge);
-        else if (retry)
-          result.emplace(size, mtime);
-      }
-      pos = ready.emplace(name, result).first;
-    }
-
-    if (!pos->second)
-      return false;
-    job.size = pos->second->first;
-    job.mtime = pos->second->second;
-    return true;
-  };
-
-  for (auto& jobs : candidates)
-    jobs.erase(std::remove_if(jobs.begin(), jobs.end(), [&](Job& job) { return !is_ready(job); }),
-               jobs.end());
-
-  // Look again as soon as the youngest file is old enough
-
-  if (due)
-  {
-    const auto wait = std::chrono::seconds(std::max<std::time_t>(1, *due - now));
-    theDirectory.next_scan =
-        std::min(theDirectory.next_scan, std::chrono::steady_clock::now() + wait);
-  }
+  keepReadyFiles(theDirectory, candidates);
 
   for (std::size_t i = 0; i < candidates.size(); i++)
   {
