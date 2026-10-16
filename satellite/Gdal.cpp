@@ -290,6 +290,52 @@ std::optional<std::array<double, 4>> estimate_bbox(const ImageInfo& info)
   return bbox;
 }
 
+// Add the scale of the target pixel segment a-b in source pixels, if both ends were
+// transformed successfully
+void add_segment_scale(const std::vector<double>& xs,
+                       const std::vector<double>& ys,
+                       const std::vector<int>& ok,
+                       int a,
+                       int b,
+                       double target,
+                       std::vector<double>& scales)
+{
+  if (ok[a] == FALSE || ok[b] == FALSE)
+    return;
+  const double dx = xs[b] - xs[a];
+  const double dy = ys[b] - ys[a];
+  const double dist = std::sqrt(dx * dx + dy * dy);
+  if (target > 0 && std::isfinite(dist))
+    scales.push_back(dist / target);
+}
+
+// The coarsest overview level whose reduction factor does not exceed the scale, -1 if none
+int coarsest_overview(GDALRasterBandH band, int levels, int width, double scale)
+{
+  int best = -1;
+  double bestfactor = 1;
+
+  for (int level = 0; level < levels; level++)
+  {
+    auto* overview = GDALGetOverview(band, level);
+    if (overview == nullptr)
+      continue;
+
+    const int overview_width = GDALGetRasterBandXSize(overview);
+    if (overview_width <= 0)
+      continue;
+
+    const double factor = static_cast<double>(width) / overview_width;
+    if (factor <= scale && factor > bestfactor)
+    {
+      best = level;
+      bestfactor = factor;
+    }
+  }
+
+  return best;
+}
+
 // ----------------------------------------------------------------------
 /*!
  * \brief Choose the overview level to read the source image from
@@ -343,16 +389,8 @@ int select_overview(GDALDatasetH src, void* transformer, const WarpOptions& opti
   {
     for (int i = 0; i < steps; i++)
     {
-      const auto a = index(i, j);
-      const auto b = index(i + 1, j);
-      if (ok[a] == FALSE || ok[b] == FALSE)
-        continue;
-      const double dx = xs[b] - xs[a];
-      const double dy = ys[b] - ys[a];
-      const double dist = std::sqrt(dx * dx + dy * dy);
       const double target = options.width / static_cast<double>(steps);
-      if (target > 0 && std::isfinite(dist))
-        scales.push_back(dist / target);
+      add_segment_scale(xs, ys, ok, index(i, j), index(i + 1, j), target, scales);
     }
   }
 
@@ -360,16 +398,8 @@ int select_overview(GDALDatasetH src, void* transformer, const WarpOptions& opti
   {
     for (int i = 0; i <= steps; i++)
     {
-      const auto a = index(i, j);
-      const auto b = index(i, j + 1);
-      if (ok[a] == FALSE || ok[b] == FALSE)
-        continue;
-      const double dx = xs[b] - xs[a];
-      const double dy = ys[b] - ys[a];
-      const double dist = std::sqrt(dx * dx + dy * dy);
       const double target = options.height / static_cast<double>(steps);
-      if (target > 0 && std::isfinite(dist))
-        scales.push_back(dist / target);
+      add_segment_scale(xs, ys, ok, index(i, j), index(i, j + 1), target, scales);
     }
   }
 
@@ -387,29 +417,7 @@ int select_overview(GDALDatasetH src, void* transformer, const WarpOptions& opti
   // the request. Overviews are not required to be powers of two, hence
   // the actual sizes are compared.
 
-  const int width = GDALGetRasterXSize(src);
-  int best = -1;
-  double bestfactor = 1;
-
-  for (int level = 0; level < levels; level++)
-  {
-    auto* overview = GDALGetOverview(band, level);
-    if (overview == nullptr)
-      continue;
-
-    const int overview_width = GDALGetRasterBandXSize(overview);
-    if (overview_width <= 0)
-      continue;
-
-    const double factor = static_cast<double>(width) / overview_width;
-    if (factor <= scale && factor > bestfactor)
-    {
-      best = level;
-      bestfactor = factor;
-    }
-  }
-
-  return best;
+  return coarsest_overview(band, levels, GDALGetRasterXSize(src), scale);
 }
 
 // ----------------------------------------------------------------------
