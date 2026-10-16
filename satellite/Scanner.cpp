@@ -247,7 +247,8 @@ std::vector<Scanner::Job> Scanner::listAll(std::size_t theMaxThreads)
 
   std::stable_sort(jobs.begin(),
                    jobs.end(),
-                   [](const Job& a, const Job& b) { return a.candidate.first > b.candidate.first; });
+                   [](const Job& a, const Job& b)
+                   { return a.candidate.first > b.candidate.first; });
   return jobs;
 }
 
