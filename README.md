@@ -234,7 +234,8 @@ image can be noticed regardless of the scan interval.
 A listing reads the file names only. New names are matched against the
 patterns of the products sharing the directory, and names seen before
 keep their matches from the previous listing, so the regular
-expressions run once per file. Deleted names are removed from the
+expressions run once per file. Hidden files and names which do not
+begin with a `YYYYMMDD_HHMM` time are ignored. Deleted names are removed from the
 repository.
 
 A new file is not read at once. The production writes some images
@@ -279,6 +280,10 @@ agree with the newest image of its product reuses that image's CRS
 instead of having GDAL build it from the GeoTIFF keys through the PROJ
 database, which was most of the CPU spent per file. The scan prints how many images it read,
 with how many threads, and how long it took.
+
+The first scan threads are named `sat-scan` and the thread polling the
+directories after it `sat-monitor`, which is how they show up in `top -H`
+and in a debugger.
 
 Opening a file makes GDAL look for sidecar files next to it, such as
 `.aux.xml` metadata and `.ovr` overviews, and to find them it lists the

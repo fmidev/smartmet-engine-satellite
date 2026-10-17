@@ -49,7 +49,8 @@ to be copied by hand once that is installed.
 cd $WMS/test
 make test-dali  DALI_TESTS="input/satellite.get"
 make test-wms   WMS_TESTS="input/wms_satellite_getmap.get input/wms_satellite_geos.get \
-                           input/wms_satellite_goes_world.get input/wms_satellite_fog_time.get"
+                           input/wms_satellite_eckert_world.get input/wms_satellite_ctth.get \
+                           input/wms_satellite_fog_time.get"
 make test-wmts  WMTS_TESTS="input/wmts_satellite_gettile.get"
 ```
 

@@ -21,7 +21,7 @@ producers and then the parameters of one. `ProductKey` is that pair.
 ```bash
 make                    # Build satellite.so
 sudo make install       # /usr/share/smartmet/engines/satellite.so + headers
-make test               # Run the Boost/tframe test
+make test               # Run the tframe tests (EngineTest, DisabledTest, ApiTest)
 make format             # clang-format
 make rpm                # Build the RPM
 ```
@@ -53,7 +53,7 @@ satellite/ProductInfo.h       Product metadata for GetCapabilities
 satellite/Config.{h,cpp}      libconfig parsing
 satellite/Product.h           One product's configuration
 satellite/Repository.{h,cpp}  The catalog: (producer,parameter) -> time -> image
-satellite/Scanner.{h,cpp}     DirectoryMonitor keeping the catalog current
+satellite/Scanner.{h,cpp}     Directory poller keeping the catalog current
 satellite/Gdal.{h,cpp}        All GDAL and PROJ usage
 ```
 
@@ -92,17 +92,20 @@ products orders of magnitude slower.
 eight. It is invisible for nearest neighbour resampling of precoloured
 data, but would need thought if interpolation were ever added.
 
-**Never drop MODIFY from the directory monitor mask.** It is not about
-modified files. Without it the monitor skips listing a directory whose
-own modification time has not advanced, and that time is shared by every
-composite in the directory and has a one second resolution. With MODIFY
-the directory is listed on every tick and each product diffs the file
-times of its own files only, so composites arriving at different moments
-are noticed independently. Removing it makes `live_scan` and
-`staggered_updates` fail, which is the intended guard.
+**The scanner lists a directory only when its time changes.** It is a
+self contained poller, not the macgyver `DirectoryMonitor`: each tick
+stats the directory and lists it only when the modification time has
+changed, or when the previous listing was not at least two seconds
+younger than that time (`Directory::settled`). The directory time is
+shared by every composite in the directory and has a one second
+resolution, so dropping the `settled` re-listing loses files arriving
+within the same second as a listing. Files rewritten in place are not
+noticed at all, which is acceptable only because the production never
+does that. `live_scan` and `staggered_updates` in `test/EngineTest.cpp`
+guard the arrival handling.
 
 **File name patterns must match the whole name, and must be anchored at
-the end.** `DirectoryMonitor` uses `boost::regex_match`, hence patterns
+the end.** The scanner uses `boost::regex_match`, hence patterns
 need a leading `.*`. One directory holds every composite of an
 instrument, and the names overlap: the AVHRR EARS directory has `ir108`,
 `ir108_ilmavoimat`, `vis06_with_ir108` and `vis08_with_ir108`, so
