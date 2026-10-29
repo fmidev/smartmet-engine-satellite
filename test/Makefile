@@ -9,7 +9,7 @@ PROG = $(ENGINE_PROG) $(API_PROG)
 
 REQUIRES = gdal configpp fmt
 
-include $(shell echo $${PREFIX-/usr})/share/smartmet/devel/makefile.inc
+include $(or $(PREFIX),$(shell smartbuildcfg --prefix))/share/smartmet/devel/makefile.inc
 
 SATELLITE_SRCDIR = ../satellite
 include ../internal-headers.mk
